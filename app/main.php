@@ -7,6 +7,24 @@ $sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 socket_set_option($sock, SOL_SOCKET, SO_REUSEADDR, 1);
 socket_bind($sock, "localhost", 6379);
 socket_listen($sock, 5);
-socket_accept($sock); // Wait for first client
 
-// socket_close($sock);
+while (true) {
+    $client = socket_accept($sock); // Wait for client connection
+    
+    if ($client === false) {
+        continue;
+    }
+    
+    while (true) {
+        $input = socket_read($client, 1024);
+        
+        if ($input === false || $input === '') {
+            break; // Client disconnected
+        }
+        
+        // Send hardcoded PONG response for any command
+        socket_write($client, "+PONG\r\n");
+    }
+    
+    socket_close($client);
+}
