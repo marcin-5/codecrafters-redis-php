@@ -9,9 +9,23 @@ use Redis\Registry\CommandRegistry;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\RESPParser;
 
-// Initialize parser and command registry with defaults
+// Parse command line arguments
+$config = [];
+$args = array_slice($argv, 1); // Skip script name
+
+for ($i = 0; $i < count($args); $i++) {
+    if ($args[$i] === '--dir' && isset($args[$i + 1])) {
+        $config['dir'] = $args[$i + 1];
+        $i++; // Skip the next argument as it's the value
+    } elseif ($args[$i] === '--dbfilename' && isset($args[$i + 1])) {
+        $config['dbfilename'] = $args[$i + 1];
+        $i++; // Skip the next argument as it's the value
+    }
+}
+
+// Initialize parser and command registry with configuration
 $parser = new RESPParser();
-$registry = CommandRegistry::createWithDefaults();
+$registry = CommandRegistry::createWithDefaults($config);
 
 $server_sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 socket_set_option($server_sock, SOL_SOCKET, SO_REUSEADDR, 1);

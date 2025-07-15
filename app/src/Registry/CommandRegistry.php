@@ -2,6 +2,7 @@
 
 namespace Redis\Registry;
 
+use Redis\Commands\ConfigGetCommand;
 use Redis\Commands\EchoCommand;
 use Redis\Commands\GetCommand;
 use Redis\Commands\PingCommand;
@@ -15,7 +16,7 @@ class CommandRegistry
 {
     private array $commands = [];
 
-    public static function createWithDefaults(): self
+    public static function createWithDefaults(array $config = []): self
     {
         $registry = new self();
 
@@ -27,6 +28,7 @@ class CommandRegistry
         $registry->register('ECHO', new EchoCommand());
         $registry->register('SET', new SetCommand($storage));
         $registry->register('GET', new GetCommand($storage));
+        $registry->register('CONFIG', new ConfigGetCommand($config));
 
         return $registry;
     }
@@ -39,6 +41,15 @@ class CommandRegistry
     public function execute(string $commandName, array $args): RESPResponse
     {
         $commandName = strtoupper($commandName);
+
+        // Handle CONFIG subcommands
+        if ($commandName === 'CONFIG' && !empty($args)) {
+            $subCommand = strtoupper($args[0]);
+            if ($subCommand === 'GET') {
+                $subArgs = array_slice($args, 1);
+                return $this->commands['CONFIG']->execute($subArgs);
+            }
+        }
 
         if (!isset($this->commands[$commandName])) {
             return ResponseFactory::unknownCommand($commandName);
