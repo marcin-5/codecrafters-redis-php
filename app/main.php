@@ -2,6 +2,17 @@
 
 error_reporting(E_ALL);
 
+// Load autoloader
+require_once __DIR__ . '/autoload.php';
+
+use Redis\Registry\CommandRegistry;
+use Redis\RESP\Response\ResponseFactory;
+use Redis\RESP\RESPParser;
+
+// Initialize parser and command registry with defaults
+$parser = new RESPParser();
+$registry = CommandRegistry::createWithDefaults();
+
 $server_sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 socket_set_option($server_sock, SOL_SOCKET, SO_REUSEADDR, 1);
 socket_bind($server_sock, "localhost", 6379);
@@ -49,8 +60,27 @@ while (true) {
             unset($clients[$key]);
             socket_close($client_sock);
         } else {
-            // Send hardcoded PONG response for any command
-            socket_write($client_sock, "+PONG\r\n");
+            try {
+                // Parse the RESP command
+                $parsed = $parser->parse($input);
+
+                if (is_array($parsed) && !empty($parsed)) {
+                    $commandName = $parsed[0];
+                    $args = array_slice($parsed, 1);
+
+                    // Execute command and get response object
+                    $response = $registry->execute($commandName, $args);
+
+                    // Serialize and send response
+                    socket_write($client_sock, $response->serialize());
+                } else {
+                    $errorResponse = ResponseFactory::error('ERR invalid command format');
+                    socket_write($client_sock, $errorResponse->serialize());
+                }
+            } catch (Exception $e) {
+                $errorResponse = ResponseFactory::error('ERR ' . $e->getMessage());
+                socket_write($client_sock, $errorResponse->serialize());
+            }
         }
     }
 }
