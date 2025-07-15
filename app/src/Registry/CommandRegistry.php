@@ -3,10 +3,13 @@
 namespace Redis\Registry;
 
 use Redis\Commands\EchoCommand;
+use Redis\Commands\GetCommand;
 use Redis\Commands\PingCommand;
 use Redis\Commands\RedisCommand;
+use Redis\Commands\SetCommand;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
+use Redis\Storage\InMemoryStorage;
 
 class CommandRegistry
 {
@@ -15,8 +18,16 @@ class CommandRegistry
     public static function createWithDefaults(): self
     {
         $registry = new self();
+
+        // Create shared storage instance
+        $storage = new InMemoryStorage();
+
+        // Register commands, injecting storage where needed
         $registry->register('PING', new PingCommand());
         $registry->register('ECHO', new EchoCommand());
+        $registry->register('SET', new SetCommand($storage));
+        $registry->register('GET', new GetCommand($storage));
+
         return $registry;
     }
 
@@ -24,8 +35,6 @@ class CommandRegistry
     {
         $this->commands[strtoupper($name)] = $command;
     }
-
-    // Static factory method to create a registry with default commands
 
     public function execute(string $commandName, array $args): RESPResponse
     {
