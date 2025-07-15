@@ -4,15 +4,16 @@ namespace Redis\RESP\Response;
 
 class ArrayResponse implements RESPResponse
 {
-    private array $elements {
-        get {
-            return $this->elements;
-        }
-    }
+    private array $elements;
 
     public function __construct(array $elements)
     {
         $this->elements = $elements;
+    }
+
+    public function getElements(): array
+    {
+        return $this->elements;
     }
 
     public function serialize(): string
@@ -44,5 +45,4 @@ class ArrayResponse implements RESPResponse
             return new SimpleStringResponse((string)$value);
         }
     }
-
 }
