@@ -49,4 +49,14 @@ class ResponseFactory
     {
         return new ErrorResponse("ERR wrong number of arguments for '$command' command");
     }
+
+    public static function syntaxError(): ErrorResponse
+    {
+        return new ErrorResponse('ERR syntax error');
+    }
+
+    public static function invalidExpireTime(): ErrorResponse
+    {
+        return new ErrorResponse('ERR invalid expire time');
+    }
 }
