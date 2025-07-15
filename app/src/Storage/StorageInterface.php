@@ -4,7 +4,7 @@ namespace Redis\Storage;
 
 interface StorageInterface
 {
-    public function set(string $key, mixed $value): bool;
+    public function set(string $key, mixed $value, ?int $expiryMs = null): bool;
 
     public function get(string $key): mixed;
 
