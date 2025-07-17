@@ -13,4 +13,7 @@ interface StorageInterface
     public function delete(string $key): bool;
 
     public function clear(): bool;
+
+    public function keys(): array;
+
 }

@@ -172,4 +172,10 @@ class PersistentStorage implements StorageInterface
         $this->saveInterval = $interval;
         $this->saveThreshold = $threshold;
     }
+
+    public function keys(): array
+    {
+        return $this->storage->keys();
+    }
+
 }

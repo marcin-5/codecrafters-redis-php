@@ -73,12 +73,16 @@ class InMemoryStorage implements StorageInterface
         return true;
     }
 
-    /**
-     * Get all data (for persistence purposes)
-     */
-    public function getAllData(): array
+    public function keys(): array
     {
-        return $this->data;
+        // Lazily purge expired keys
+        foreach (array_keys($this->expiry) as $key) {
+            if ($this->hasExpired($key)) {
+                $this->delete($key);
+            }
+        }
+
+        return array_keys($this->data);
     }
 
     /**
