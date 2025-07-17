@@ -8,6 +8,10 @@ class ArgumentParser
 {
     public static function parse(array $argv): array
     {
+        if (empty($argv)) {
+            throw new InvalidArgumentException('No arguments provided');
+        }
+
         $config = [
             'port' => 6379,
             'dir' => '/tmp/rdb',
@@ -20,33 +24,55 @@ class ArgumentParser
             '--port' => [
                 'values' => 1,
                 'handler' => function (&$config, $values) {
-                    $config['port'] = (int)$values[0];
+                    $port = (int)$values[0];
+                    if ($port < 1 || $port > 65535) {
+                        throw new InvalidArgumentException("Port must be between 1 and 65535, got: $port");
+                    }
+                    $config['port'] = $port;
                 }
             ],
             '--dir' => [
                 'values' => 1,
                 'handler' => function (&$config, $values) {
-                    $config['dir'] = $values[0];
+                    $dir = $values[0];
+                    if (empty($dir) || strpos($dir, '..') !== false) {
+                        throw new InvalidArgumentException("Invalid directory path: $dir");
+                    }
+                    $config['dir'] = $dir;
                 }
             ],
             '--dbfilename' => [
                 'values' => 1,
                 'handler' => function (&$config, $values) {
-                    $config['dbfilename'] = $values[0];
+                    $filename = $values[0];
+                    if (empty($filename) || strpos($filename, '/') !== false) {
+                        throw new InvalidArgumentException("Invalid filename: $filename");
+                    }
+                    $config['dbfilename'] = $filename;
                 }
             ],
             '--replicaof' => [
                 'values' => 2,
                 'handler' => function (&$config, $values) {
+                    $host = $values[0];
+                    $port = (int)$values[1];
+
+                    if (empty($host)) {
+                        throw new InvalidArgumentException("Host cannot be empty");
+                    }
+                    if ($port < 1 || $port > 65535) {
+                        throw new InvalidArgumentException("Replica port must be between 1 and 65535, got: $port");
+                    }
+
                     $config['replicaof'] = [
-                        'host' => $values[0],
-                        'port' => (int)$values[1]
+                        'host' => $host,
+                        'port' => $port
                     ];
                 }
             ]
         ];
 
-        // Parse arguments while respecting quotations
+        // Parse arguments while handling quoted strings
         $parsedArgs = self::splitArguments($argv);
 
         // Process parsed arguments
@@ -62,7 +88,10 @@ class ArgumentParser
             $values = array_slice($parsedArgs, $i + 1, $expectedCount);
 
             if (count($values) !== $expectedCount) {
-                throw new InvalidArgumentException("Argument $arg expects $expectedCount values.");
+                $valueText = $expectedCount === 1 ? 'value' : 'values';
+                throw new InvalidArgumentException(
+                    "Argument $arg expects $expectedCount $valueText, got " . count($values),
+                );
             }
 
             // Call handler to process argument and values
@@ -76,13 +105,33 @@ class ArgumentParser
 
     /**
      * Splits command-line arguments while preserving quoted strings.
+     * Handles cases like --replicaof "localhost 6379"
      *
-     * @param array $argv Raw arguments.
-     * @return array Parsed arguments.
+     * @param array $argv Raw arguments from command line
+     * @return array Parsed arguments with quoted strings properly split
      */
     private static function splitArguments(array $argv): array
     {
-        $command = implode(' ', array_map('escapeshellarg', array_slice($argv, 1)));
-        return array_merge([array_shift($argv)], str_getcsv($command, ' '));
+        if (empty($argv)) {
+            return [];
+        }
+
+        $result = [$argv[0]]; // Keep the program name
+
+        for ($i = 1; $i < count($argv); $i++) {
+            $arg = $argv[$i];
+
+            // Check if this argument contains spaces (indicating it was quoted)
+            if (str_contains($arg, ' ')) {
+                // Split the quoted argument by spaces
+                $parts = explode(' ', $arg);
+                $result = array_merge($result, $parts);
+            } else {
+                // Regular argument, add as-is
+                $result[] = $arg;
+            }
+        }
+
+        return $result;
     }
 }
