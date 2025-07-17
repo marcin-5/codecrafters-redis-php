@@ -16,6 +16,8 @@ class ReplicationSection implements InfoSectionInterface
         $config = ReplicationConfig::getInstance();
         $pairs = [
             'role' => $config->getRole(),
+            'master_replid' => '0123456789abcdefghijklmnopqrstuvwxyz67890',
+            'master_repl_offset' => 0,
         ];
 
         // Add master-specific info if this is a slave
