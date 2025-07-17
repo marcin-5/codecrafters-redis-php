@@ -9,27 +9,44 @@ use Redis\Registry\CommandRegistry;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\RESPParser;
 
-// Parse command line arguments
+// --------------------------------------------------
+// Parse command-line arguments
+// --------------------------------------------------
 $config = [];
-$args = array_slice($argv, 1); // Skip script name
+$listenPort = 6379;                 // <-- default port
+$cliArgs = array_slice($argv, 1);
 
-for ($i = 0; $i < count($args); $i++) {
-    if ($args[$i] === '--dir' && isset($args[$i + 1])) {
-        $config['dir'] = $args[$i + 1];
-        $i++; // Skip the next argument as it's the value
-    } elseif ($args[$i] === '--dbfilename' && isset($args[$i + 1])) {
-        $config['dbfilename'] = $args[$i + 1];
-        $i++; // Skip the next argument as it's the value
+for ($i = 0; $i < count($cliArgs); $i++) {
+    switch ($cliArgs[$i]) {
+        case '--dir':
+            if (isset($cliArgs[$i + 1])) {
+                $config['dir'] = $cliArgs[++$i];
+            }
+            break;
+
+        case '--dbfilename':
+            if (isset($cliArgs[$i + 1])) {
+                $config['dbfilename'] = $cliArgs[++$i];
+            }
+            break;
+
+        case '--port':
+            if (isset($cliArgs[$i + 1])) {
+                $listenPort = (int)$cliArgs[++$i];
+            }
+            break;
     }
 }
 
-// Initialize parser and command registry with configuration
+// --------------------------------------------------
+// Initialise parser, registry and TCP server
+// --------------------------------------------------
 $parser = new RESPParser();
 $registry = CommandRegistry::createWithDefaults($config);
 
 $server_sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 socket_set_option($server_sock, SOL_SOCKET, SO_REUSEADDR, 1);
-socket_bind($server_sock, "localhost", 6379);
+socket_bind($server_sock, "localhost", $listenPort);
 socket_listen($server_sock, 5);
 
 // Array to hold all client sockets
