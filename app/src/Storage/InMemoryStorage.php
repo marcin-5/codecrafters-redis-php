@@ -72,4 +72,20 @@ class InMemoryStorage implements StorageInterface
         $this->expiry = [];
         return true;
     }
+
+    /**
+     * Get all data (for persistence purposes)
+     */
+    public function getAllData(): array
+    {
+        return $this->data;
+    }
+
+    /**
+     * Get all expiry data (for persistence purposes)
+     */
+    public function getAllExpiry(): array
+    {
+        return $this->expiry;
+    }
 }
