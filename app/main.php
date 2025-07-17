@@ -5,38 +5,24 @@ error_reporting(E_ALL);
 // Load autoloader
 require_once __DIR__ . '/autoload.php';
 
+use Redis\Config\ArgumentParser;
+use Redis\Config\ReplicationConfig;
 use Redis\Registry\CommandRegistry;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\RESPParser;
 
-// --------------------------------------------------
-// Parse command-line arguments
-// --------------------------------------------------
-$config = [];
-$listenPort = 6379;                 // <-- default port
-$cliArgs = array_slice($argv, 1);
+// Parse command line arguments
+$config = ArgumentParser::parse($argv);
 
-for ($i = 0; $i < count($cliArgs); $i++) {
-    switch ($cliArgs[$i]) {
-        case '--dir':
-            if (isset($cliArgs[$i + 1])) {
-                $config['dir'] = $cliArgs[++$i];
-            }
-            break;
-
-        case '--dbfilename':
-            if (isset($cliArgs[$i + 1])) {
-                $config['dbfilename'] = $cliArgs[++$i];
-            }
-            break;
-
-        case '--port':
-            if (isset($cliArgs[$i + 1])) {
-                $listenPort = (int)$cliArgs[++$i];
-            }
-            break;
-    }
+// Configure replication if --replicaof is provided
+if (isset($config['replicaof'])) {
+    $replicationConfig = ReplicationConfig::getInstance();
+    $replicationConfig->setReplicaOf(
+        $config['replicaof']['host'],
+        $config['replicaof']['port'],
+    );
 }
+
 
 // --------------------------------------------------
 // Initialise parser, registry and TCP server
@@ -46,13 +32,16 @@ $registry = CommandRegistry::createWithDefaults($config);
 
 $server_sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 socket_set_option($server_sock, SOL_SOCKET, SO_REUSEADDR, 1);
-socket_bind($server_sock, "localhost", $listenPort);
+socket_bind($server_sock, "localhost", $config['port']);
 socket_listen($server_sock, 5);
+
+echo "Starting server on port {$config['port']}...\n";
+if (isset($config['replicaof'])) {
+    echo "Running as replica of {$config['replicaof']['host']}:{$config['replicaof']['port']}\n";
+}
 
 // Array to hold all client sockets
 $clients = [];
-
-echo "Server started on localhost:6379\n";
 
 while (true) {
     // Prepare arrays for socket_select
