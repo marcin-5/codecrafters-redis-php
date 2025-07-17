@@ -10,7 +10,7 @@ use Redis\Commands\RedisCommand;
 use Redis\Commands\SetCommand;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
-use Redis\Storage\InMemoryStorage;
+use Redis\Storage\StorageFactory;
 
 class CommandRegistry
 {
@@ -21,7 +21,7 @@ class CommandRegistry
         $registry = new self();
 
         // Create shared storage instance
-        $storage = new InMemoryStorage();
+        $storage = StorageFactory::createStorage($config);
 
         // Register commands, injecting storage where needed
         $registry->register('PING', new PingCommand());
