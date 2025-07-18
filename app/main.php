@@ -24,10 +24,11 @@ if (isset($config['replicaof'])) {
         $config['replicaof']['port'],
     );
 
-    // Create replication client
+    // Create replication client with replica port
     $replicationClient = new ReplicationClient(
         $config['replicaof']['host'],
         $config['replicaof']['port'],
+        $config['port'], // Pass the replica's listening port
     );
 }
 

@@ -15,6 +15,7 @@ class ReplicationClient
     public function __construct(
         private readonly string $masterHost,
         private readonly int $masterPort,
+        private readonly int $replicaPort,
     ) {
     }
 
@@ -58,9 +59,23 @@ class ReplicationClient
     public function performHandshake(): void
     {
         $this->connect();
+
+        // Step 1: Send PING
         $this->ping();
         $response = $this->readResponse();
-        echo 'Received response: ' . trim($response) . PHP_EOL;
+        echo 'Received PING response: ' . trim($response) . PHP_EOL;
+
+        // Step 2: Send REPLCONF listening-port <PORT>
+        $this->sendReplconfListeningPort();
+        $response = $this->readResponse();
+        echo 'Received REPLCONF listening-port response: ' . trim($response) . PHP_EOL;
+
+        // Step 3: Send REPLCONF capa psync2
+        $this->sendReplconfCapabilities();
+        $response = $this->readResponse();
+        echo 'Received REPLCONF capa response: ' . trim($response) . PHP_EOL;
+
+        echo 'Handshake completed successfully!' . PHP_EOL;
     }
 
     /**
@@ -106,6 +121,38 @@ class ReplicationClient
             throw new Exception('Failed to read response: ' . socket_strerror(socket_last_error($this->socket)));
         }
         return $response;
+    }
+
+    /**
+     * Send REPLCONF listening-port <PORT> command to master.
+     * Format: *3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n6380\r\n
+     * @throws Exception
+     */
+    private function sendReplconfListeningPort(): void
+    {
+        $replconfCommand = new ArrayResponse([
+            'REPLCONF',
+            'listening-port',
+            (string)$this->replicaPort
+        ]);
+        $this->sendPayload($replconfCommand->serialize(), 'REPLCONF listening-port');
+        echo "Sent REPLCONF listening-port {$this->replicaPort} to master" . PHP_EOL;
+    }
+
+    /**
+     * Send REPLCONF capa psync2 command to master.
+     * Format: *3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n
+     * @throws Exception
+     */
+    private function sendReplconfCapabilities(): void
+    {
+        $replconfCommand = new ArrayResponse([
+            'REPLCONF',
+            'capa',
+            'psync2'
+        ]);
+        $this->sendPayload($replconfCommand->serialize(), 'REPLCONF capa');
+        echo 'Sent REPLCONF capa psync2 to master' . PHP_EOL;
     }
 
     /**
