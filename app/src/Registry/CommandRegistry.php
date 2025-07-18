@@ -9,6 +9,7 @@ use Redis\Commands\InfoCommand;
 use Redis\Commands\KeysCommand;
 use Redis\Commands\PingCommand;
 use Redis\Commands\RedisCommand;
+use Redis\Commands\ReplconfCommand;
 use Redis\Commands\SetCommand;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
@@ -33,6 +34,7 @@ class CommandRegistry
         $registry->register('CONFIG', new ConfigGetCommand($config));
         $registry->register('KEYS', new KeysCommand($storage));
         $registry->register('INFO', new InfoCommand());
+        $registry->register('REPLCONF', new ReplconfCommand());
 
         return $registry;
     }
