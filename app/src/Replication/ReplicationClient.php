@@ -75,6 +75,11 @@ class ReplicationClient
         $response = $this->readResponse();
         echo 'Received REPLCONF capa response: ' . trim($response) . PHP_EOL;
 
+        // Step 4: Send PSYNC ? -1
+        $this->sendPsync();
+        $response = $this->readResponse();
+        echo 'Received PSYNC response: ' . trim($response) . PHP_EOL;
+
         echo 'Handshake completed successfully!' . PHP_EOL;
     }
 
@@ -153,6 +158,22 @@ class ReplicationClient
         ]);
         $this->sendPayload($replconfCommand->serialize(), 'REPLCONF capa');
         echo 'Sent REPLCONF capa psync2 to master' . PHP_EOL;
+    }
+
+    /**
+     * Send PSYNC ? -1 command to master.
+     * Format: *3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n
+     * @throws Exception
+     */
+    private function sendPsync(): void
+    {
+        $psyncCommand = new ArrayResponse([
+            'PSYNC',
+            '?',
+            '-1'
+        ]);
+        $this->sendPayload($psyncCommand->serialize(), 'PSYNC');
+        echo 'Sent PSYNC ? -1 to master' . PHP_EOL;
     }
 
     /**
