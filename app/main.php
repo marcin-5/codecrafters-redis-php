@@ -8,6 +8,7 @@ require_once __DIR__ . '/autoload.php';
 use Redis\Config\ArgumentParser;
 use Redis\Config\ReplicationConfig;
 use Redis\Registry\CommandRegistry;
+use Redis\Replication\ReplicationClient;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\RESPParser;
 
@@ -15,14 +16,20 @@ use Redis\RESP\RESPParser;
 $config = ArgumentParser::parse($argv);
 
 // Configure replication if --replicaof is provided
+$replicationClient = null;
 if (isset($config['replicaof'])) {
     $replicationConfig = ReplicationConfig::getInstance();
     $replicationConfig->setReplicaOf(
         $config['replicaof']['host'],
         $config['replicaof']['port'],
     );
-}
 
+    // Create replication client
+    $replicationClient = new ReplicationClient(
+        $config['replicaof']['host'],
+        $config['replicaof']['port'],
+    );
+}
 
 // --------------------------------------------------
 // Initialise parser, registry and TCP server
@@ -38,6 +45,14 @@ socket_listen($server_sock, 5);
 echo "Starting server on port {$config['port']}...\n";
 if (isset($config['replicaof'])) {
     echo "Running as replica of {$config['replicaof']['host']}:{$config['replicaof']['port']}\n";
+
+    // Perform handshake with master
+    try {
+        $replicationClient->performHandshake();
+    } catch (Exception $e) {
+        echo "Failed to perform handshake: " . $e->getMessage() . "\n";
+        exit(1);
+    }
 }
 
 // Array to hold all client sockets
@@ -110,3 +125,8 @@ foreach ($clients as $client) {
     socket_close($client);
 }
 socket_close($server_sock);
+
+// Cleanup replication client
+if ($replicationClient) {
+    $replicationClient->disconnect();
+}
