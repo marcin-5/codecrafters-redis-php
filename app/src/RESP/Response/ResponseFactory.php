@@ -44,6 +44,11 @@ class ResponseFactory
         return new RDBResponse($rdbData);
     }
 
+    public static function fullResync(string $replId, int $replOffset, string $rdbData): FullResyncResponse
+    {
+        return new FullResyncResponse($replId, $replOffset, $rdbData);
+    }
+
     // Common error responses
     public static function unknownCommand(string $command): ErrorResponse
     {
