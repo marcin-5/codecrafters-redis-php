@@ -45,6 +45,12 @@ if ($replicationClient) {
 
     try {
         $replicationClient->performHandshake();
+        $masterSocket = $replicationClient->getSocket();
+        if ($masterSocket) {
+            $server->registerMasterConnection($masterSocket);
+        } else {
+            throw new Exception("Failed to get master socket after handshake.");
+        }
     } catch (Exception $e) {
         echo "Failed to perform handshake: " . $e->getMessage() . "\n";
         exit(1);

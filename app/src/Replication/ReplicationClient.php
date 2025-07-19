@@ -20,6 +20,16 @@ class ReplicationClient
     }
 
     /**
+     * Retrieves the current socket instance.
+     *
+     * @return Socket|null Returns the socket instance if available, or null if not set.
+     */
+    public function getSocket(): ?Socket
+    {
+        return $this->socket;
+    }
+
+    /**
      * Send any command to master using ArrayResponse.
      * @throws Exception
      */

@@ -31,6 +31,20 @@ class RedisServer
     }
 
     /**
+     * Registers a master connection for command propagation.
+     *
+     * @param Socket $masterSocket The socket representing the master connection.
+     * @return void
+     */
+    public function registerMasterConnection(Socket $masterSocket): void
+    {
+        $socketId = spl_object_id($masterSocket);
+        $this->clients[$socketId] = $masterSocket;
+        $this->replicaProcessors[$socketId] = new ReplicaCommandProcessor($this->parser, $this->registry);
+        echo "Master connection registered for command propagation." . PHP_EOL;
+    }
+
+    /**
      * Start the server and listen for connections
      * @throws Exception
      */
@@ -122,21 +136,21 @@ class RedisServer
      */
     private function handleClientActivity(Socket $clientSocket): void
     {
-        $input = socket_read($clientSocket, self::BUFFER_SIZE);
-        if ($input === false || $input === '') {
-            $this->disconnectClient($clientSocket);
-            return;
-        }
+        $socketId = spl_object_id($clientSocket);
 
-        try {
-            // Check if this is a replica connection
-            if ($this->replicationManager->isReplica($clientSocket)) {
-                $this->processReplicaInput($clientSocket, $input);
-            } else {
-                $this->processClientInput($clientSocket, $input);
+        if (isset($this->replicaProcessors[$socketId])) {
+            // Data from master
+            $data = socket_read($clientSocket, self::BUFFER_SIZE);
+            if ($data === false || $data === '') {
+                echo "Connection to master lost." . PHP_EOL;
+                $this->disconnectClient($clientSocket);
+                // You might want to add logic here to attempt reconnection
+                return;
             }
-        } catch (Exception $e) {
-            $this->sendErrorResponse($clientSocket, $e->getMessage());
+            $this->replicaProcessors[$socketId]->processIncomingData($data);
+        } else {
+            // Data from a regular client
+            $this->handleRegularClient($clientSocket);
         }
     }
 
@@ -145,21 +159,133 @@ class RedisServer
      */
     private function disconnectClient(Socket $clientSocket): void
     {
-        echo "Client disconnected" . PHP_EOL;
-
         $socketId = spl_object_id($clientSocket);
+        echo "Client disconnected: {$socketId}" . PHP_EOL;
 
-        // Clean up replica processor if it exists
-        if (isset($this->replicaProcessors[$socketId])) {
-            unset($this->replicaProcessors[$socketId]);
+        // Clean up resources
+        unset($this->clients[$socketId]);
+        unset($this->replicaProcessors[$socketId]);
+        $this->replicationManager->removeReplica($clientSocket);
+        socket_close($clientSocket);
+    }
+
+    private function handleRegularClient(Socket $clientSocket): void
+    {
+        $data = socket_read($clientSocket, self::BUFFER_SIZE);
+        if ($data === false || $data === '') {
+            $this->disconnectClient($clientSocket);
+            return;
         }
 
-        // Remove from replicas if it was one
-        $this->replicationManager->removeReplica($clientSocket);
+        try {
+            $offset = 0;
+            $parsedCommand = $this->parser->parseNext($data, $offset);
 
-        // Remove from clients
-        unset($this->clients[$socketId]);
-        socket_close($clientSocket);
+            if (!is_array($parsedCommand) || empty($parsedCommand)) {
+                // Not a valid command, might be partial.
+                // For this implementation, we'll assume one command per read and ignore invalid.
+                return;
+            }
+
+            $commandName = strtolower(array_shift($parsedCommand));
+            $args = $parsedCommand;
+
+            $response = $this->registry->execute($commandName, $args);
+            $this->sendResponse($clientSocket, $response);
+
+            // Handle replication state changes and command propagation
+            $this->handleReplicationForCommand($clientSocket, $commandName, $args);
+        } catch (Exception $e) {
+            echo "Error processing client command: " . $e->getMessage() . PHP_EOL;
+            $this->sendErrorResponse($clientSocket, $e->getMessage());
+        }
+    }
+
+    /**
+     * Send a response to a client
+     */
+    private function sendResponse(Socket $clientSocket, $response): void
+    {
+        socket_write($clientSocket, $response->serialize());
+    }
+
+    /**
+     * Handle replication logic for commands
+     */
+    private function handleReplicationForCommand(Socket $clientSocket, string $commandName, array $args): void
+    {
+        $upperCommand = strtoupper($commandName);
+
+        // Register replica after successful PSYNC
+        if ($upperCommand === 'PSYNC') {
+            $this->replicationManager->addReplica($clientSocket);
+            return;
+        }
+
+        // Don't propagate commands from replicas back to other replicas
+        if ($this->replicationManager->isReplica($clientSocket)) {
+            return;
+        }
+
+        // Propagate write commands to replicas
+        if ($this->isWriteCommand($upperCommand)) {
+            $this->replicationManager->propagateCommand($commandName, $args);
+        }
+    }
+
+    /**
+     * Check if a command is a write command that should be propagated
+     */
+    private function isWriteCommand(string $commandName): bool
+    {
+        $writeCommands = [
+            'SET',
+            'DEL',
+            'EXPIRE',
+            'FLUSHALL',
+            'FLUSHDB',
+        ];
+
+        return in_array($commandName, $writeCommands, true);
+    }
+
+    /**
+     * Send an error response to a client
+     */
+    private function sendErrorResponse(Socket $clientSocket, string $message): void
+    {
+        $errorResponse = ResponseFactory::error('ERR ' . $message);
+        $this->sendResponse($clientSocket, $errorResponse);
+    }
+
+    /**
+     * Stop the server
+     */
+    public function stop(): void
+    {
+        $this->running = false;
+        $this->cleanup();
+        echo "Server stopped" . PHP_EOL;
+    }
+
+    /**
+     * Cleanup resources
+     */
+    private function cleanup(): void
+    {
+        foreach ($this->clients as $client) {
+            socket_close($client);
+        }
+        $this->clients = [];
+        if ($this->serverSocket) {
+            socket_close($this->serverSocket);
+            $this->serverSocket = null;
+        }
+    }
+
+    public function getReplicationManager(): ReplicationManager
+    {
+        return $this->replicationManager;
     }
 
     /**
@@ -218,92 +344,5 @@ class RedisServer
             array_shift($parsed),
             $parsed,
         ];
-    }
-
-    /**
-     * Send an error response to a client
-     */
-    private function sendErrorResponse(Socket $clientSocket, string $message): void
-    {
-        $errorResponse = ResponseFactory::error('ERR ' . $message);
-        $this->sendResponse($clientSocket, $errorResponse);
-    }
-
-    /**
-     * Send a response to a client
-     */
-    private function sendResponse(Socket $clientSocket, $response): void
-    {
-        socket_write($clientSocket, $response->serialize());
-    }
-
-    /**
-     * Handle replication logic for commands
-     */
-    private function handleReplicationForCommand(Socket $clientSocket, string $commandName, array $args): void
-    {
-        $upperCommand = strtoupper($commandName);
-
-        // Register replica after successful PSYNC
-        if ($upperCommand === 'PSYNC') {
-            $this->replicationManager->addReplica($clientSocket);
-            return;
-        }
-
-        // Don't propagate commands from replicas back to other replicas
-        if ($this->replicationManager->isReplica($clientSocket)) {
-            return;
-        }
-
-        // Propagate write commands to replicas
-        if ($this->isWriteCommand($upperCommand)) {
-            $this->replicationManager->propagateCommand($commandName, $args);
-        }
-    }
-
-    /**
-     * Check if a command is a write command that should be propagated
-     */
-    private function isWriteCommand(string $commandName): bool
-    {
-        $writeCommands = [
-            'SET',
-            'DEL',
-            'EXPIRE',
-            'FLUSHALL',
-            'FLUSHDB',
-        ];
-
-        return in_array($commandName, $writeCommands, true);
-    }
-
-    /**
-     * Stop the server
-     */
-    public function stop(): void
-    {
-        $this->running = false;
-        $this->cleanup();
-        echo "Server stopped" . PHP_EOL;
-    }
-
-    /**
-     * Cleanup resources
-     */
-    private function cleanup(): void
-    {
-        foreach ($this->clients as $client) {
-            socket_close($client);
-        }
-        $this->clients = [];
-        if ($this->serverSocket) {
-            socket_close($this->serverSocket);
-            $this->serverSocket = null;
-        }
-    }
-
-    public function getReplicationManager(): ReplicationManager
-    {
-        return $this->replicationManager;
     }
 }
