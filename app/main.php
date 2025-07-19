@@ -48,6 +48,13 @@ if ($replicationClient) {
         $masterSocket = $replicationClient->getSocket();
         if ($masterSocket) {
             $server->registerMasterConnection($masterSocket);
+            
+            // Process any remaining buffered data from handshake
+            $bufferedData = $replicationClient->getBufferedData();
+            if (!empty($bufferedData)) {
+                echo "Processing buffered data from handshake: " . json_encode($bufferedData) . PHP_EOL;
+                $server->processBufferedMasterData($masterSocket, $bufferedData);
+            }
         } else {
             throw new Exception("Failed to get master socket after handshake.");
         }
