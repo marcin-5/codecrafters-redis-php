@@ -8,6 +8,7 @@ use Redis\Commands\GetCommand;
 use Redis\Commands\InfoCommand;
 use Redis\Commands\KeysCommand;
 use Redis\Commands\PingCommand;
+use Redis\Commands\PsyncCommand;
 use Redis\Commands\RedisCommand;
 use Redis\Commands\ReplconfCommand;
 use Redis\Commands\SetCommand;
@@ -35,6 +36,7 @@ class CommandRegistry
         $registry->register('KEYS', new KeysCommand($storage));
         $registry->register('INFO', new InfoCommand());
         $registry->register('REPLCONF', new ReplconfCommand());
+        $registry->register('PSYNC', new PsyncCommand());
 
         return $registry;
     }
