@@ -39,6 +39,11 @@ class ResponseFactory
         return new BulkStringResponse(null);
     }
 
+    public static function rdb(string $rdbData): RDBResponse
+    {
+        return new RDBResponse($rdbData);
+    }
+
     // Common error responses
     public static function unknownCommand(string $command): ErrorResponse
     {
