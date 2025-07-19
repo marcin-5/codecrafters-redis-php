@@ -40,8 +40,22 @@ class RedisServer
     {
         $socketId = spl_object_id($masterSocket);
         $this->clients[$socketId] = $masterSocket;
-        $this->replicaProcessors[$socketId] = new ReplicaCommandProcessor($this->parser, $this->registry);
+        $this->replicaProcessors[$socketId] = new ReplicaCommandProcessor(
+            $this->parser, $this->registry, $masterSocket,
+        );
         echo "Master connection registered for command propagation." . PHP_EOL;
+    }
+
+    /**
+     * Process buffered data from master connection
+     */
+    public function processBufferedMasterData(Socket $masterSocket, string $data): void
+    {
+        $socketId = spl_object_id($masterSocket);
+
+        if (isset($this->replicaProcessors[$socketId])) {
+            $this->replicaProcessors[$socketId]->processIncomingData($data);
+        }
     }
 
     /**
@@ -96,6 +110,7 @@ class RedisServer
         $read[] = $this->serverSocket;
         $write = null;
         $except = null;
+
         // The $read array is modified by socket_select to contain only sockets with activity
         $activity = socket_select($read, $write, $except, 0, self::SELECT_TIMEOUT_MICROSECONDS);
         if ($activity === false) {
@@ -105,6 +120,7 @@ class RedisServer
         if ($activity === 0) {
             return; // Timeout, continue loop
         }
+
         // Check for new connections
         if (in_array($this->serverSocket, $read, true)) {
             $this->acceptNewConnection();
@@ -286,63 +302,5 @@ class RedisServer
     public function getReplicationManager(): ReplicationManager
     {
         return $this->replicationManager;
-    }
-
-    /**
-     * Process input from a replica (commands from master)
-     */
-    private function processReplicaInput(Socket $clientSocket, string $input): void
-    {
-        $socketId = spl_object_id($clientSocket);
-
-        // Create processor for this replica if it doesn't exist
-        if (!isset($this->replicaProcessors[$socketId])) {
-            $this->replicaProcessors[$socketId] = new ReplicaCommandProcessor(
-                $this->parser,
-                $this->registry,
-            );
-        }
-
-        // Process the incoming data (might contain partial/multiple commands)
-        $this->replicaProcessors[$socketId]->processIncomingData($input);
-    }
-
-    /**
-     * Process input from a regular client
-     * @throws Exception
-     */
-    private function processClientInput(Socket $clientSocket, string $input): void
-    {
-        $commandParts = $this->parseCommandAndArgs($input);
-        if ($commandParts === null) {
-            $this->sendErrorResponse($clientSocket, 'invalid command format');
-            return;
-        }
-        [$commandName, $args] = $commandParts;
-        echo "Received command: {$commandName}" . (empty($args) ? '' : ' ' . implode(' ', $args)) . PHP_EOL;
-
-        $response = $this->registry->execute($commandName, $args);
-        $this->sendResponse($clientSocket, $response);
-
-        // Handle replication logic
-        $this->handleReplicationForCommand($clientSocket, $commandName, $args);
-    }
-
-    /**
-     * Parses the raw input string into a command and its arguments.
-     *
-     * @return array{0: string, 1: array}|null
-     * @throws Exception
-     */
-    private function parseCommandAndArgs(string $input): ?array
-    {
-        $parsed = $this->parser->parse($input);
-        if (!is_array($parsed) || empty($parsed) || !is_string($parsed[0])) {
-            return null;
-        }
-        return [
-            array_shift($parsed),
-            $parsed,
-        ];
     }
 }
