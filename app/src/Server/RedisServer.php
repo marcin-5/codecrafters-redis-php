@@ -4,6 +4,7 @@ namespace Redis\Server;
 
 use Exception;
 use Redis\Registry\CommandRegistry;
+use Redis\Replication\ReplicaCommandProcessor;
 use Redis\Replication\ReplicationManager;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\RESPParser;
@@ -16,6 +17,8 @@ class RedisServer
     private ?Socket $serverSocket = null;
     /** @var array<int, Socket> */
     private array $clients = [];
+    /** @var array<int, ReplicaCommandProcessor> */
+    private array $replicaProcessors = [];
     private bool $running = false;
 
     public function __construct(
@@ -124,8 +127,14 @@ class RedisServer
             $this->disconnectClient($clientSocket);
             return;
         }
+
         try {
-            $this->processClientInput($clientSocket, $input);
+            // Check if this is a replica connection
+            if ($this->replicationManager->isReplica($clientSocket)) {
+                $this->processReplicaInput($clientSocket, $input);
+            } else {
+                $this->processClientInput($clientSocket, $input);
+            }
         } catch (Exception $e) {
             $this->sendErrorResponse($clientSocket, $e->getMessage());
         }
@@ -138,16 +147,42 @@ class RedisServer
     {
         echo "Client disconnected" . PHP_EOL;
 
+        $socketId = spl_object_id($clientSocket);
+
+        // Clean up replica processor if it exists
+        if (isset($this->replicaProcessors[$socketId])) {
+            unset($this->replicaProcessors[$socketId]);
+        }
+
         // Remove from replicas if it was one
         $this->replicationManager->removeReplica($clientSocket);
 
-        // Use spl_object_id to find and remove the client
-        unset($this->clients[spl_object_id($clientSocket)]);
+        // Remove from clients
+        unset($this->clients[$socketId]);
         socket_close($clientSocket);
     }
 
     /**
-     * Process input from a client
+     * Process input from a replica (commands from master)
+     */
+    private function processReplicaInput(Socket $clientSocket, string $input): void
+    {
+        $socketId = spl_object_id($clientSocket);
+
+        // Create processor for this replica if it doesn't exist
+        if (!isset($this->replicaProcessors[$socketId])) {
+            $this->replicaProcessors[$socketId] = new ReplicaCommandProcessor(
+                $this->parser,
+                $this->registry,
+            );
+        }
+
+        // Process the incoming data (might contain partial/multiple commands)
+        $this->replicaProcessors[$socketId]->processIncomingData($input);
+    }
+
+    /**
+     * Process input from a regular client
      * @throws Exception
      */
     private function processClientInput(Socket $clientSocket, string $input): void
@@ -234,6 +269,9 @@ class RedisServer
         $writeCommands = [
             'SET',
             'DEL',
+            'EXPIRE',
+            'FLUSHALL',
+            'FLUSHDB',
         ];
 
         return in_array($commandName, $writeCommands, true);
