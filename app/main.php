@@ -9,6 +9,7 @@ use Redis\Config\ArgumentParser;
 use Redis\Config\ReplicationConfig;
 use Redis\Registry\CommandRegistry;
 use Redis\Replication\ReplicationClient;
+use Redis\Replication\ReplicationManager;
 use Redis\RESP\RESPParser;
 use Redis\Server\RedisServer;
 
@@ -35,7 +36,8 @@ if (isset($config['replicaof'])) {
 // Initialize components
 $parser = new RESPParser();
 $registry = CommandRegistry::createWithDefaults($config);
-$server = new RedisServer('localhost', $config['port'], $parser, $registry);
+$replicationManager = new ReplicationManager();
+$server = new RedisServer('localhost', $config['port'], $parser, $registry, $replicationManager);
 
 // Handle replication handshake if this is a replica
 if ($replicationClient) {

@@ -4,6 +4,7 @@ namespace Redis\Server;
 
 use Exception;
 use Redis\Registry\CommandRegistry;
+use Redis\Replication\ReplicationManager;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\RESPParser;
 use Socket;
@@ -22,6 +23,7 @@ class RedisServer
         private readonly int $port,
         private readonly RESPParser $parser,
         private readonly CommandRegistry $registry,
+        private readonly ReplicationManager $replicationManager,
     ) {
     }
 
@@ -135,6 +137,10 @@ class RedisServer
     private function disconnectClient(Socket $clientSocket): void
     {
         echo "Client disconnected" . PHP_EOL;
+
+        // Remove from replicas if it was one
+        $this->replicationManager->removeReplica($clientSocket);
+
         // Use spl_object_id to find and remove the client
         unset($this->clients[spl_object_id($clientSocket)]);
         socket_close($clientSocket);
@@ -153,8 +159,12 @@ class RedisServer
         }
         [$commandName, $args] = $commandParts;
         echo "Received command: {$commandName}" . (empty($args) ? '' : ' ' . implode(' ', $args)) . PHP_EOL;
+
         $response = $this->registry->execute($commandName, $args);
         $this->sendResponse($clientSocket, $response);
+
+        // Handle replication logic
+        $this->handleReplicationForCommand($clientSocket, $commandName, $args);
     }
 
     /**
@@ -193,6 +203,43 @@ class RedisServer
     }
 
     /**
+     * Handle replication logic for commands
+     */
+    private function handleReplicationForCommand(Socket $clientSocket, string $commandName, array $args): void
+    {
+        $upperCommand = strtoupper($commandName);
+
+        // Register replica after successful PSYNC
+        if ($upperCommand === 'PSYNC') {
+            $this->replicationManager->addReplica($clientSocket);
+            return;
+        }
+
+        // Don't propagate commands from replicas back to other replicas
+        if ($this->replicationManager->isReplica($clientSocket)) {
+            return;
+        }
+
+        // Propagate write commands to replicas
+        if ($this->isWriteCommand($upperCommand)) {
+            $this->replicationManager->propagateCommand($commandName, $args);
+        }
+    }
+
+    /**
+     * Check if a command is a write command that should be propagated
+     */
+    private function isWriteCommand(string $commandName): bool
+    {
+        $writeCommands = [
+            'SET',
+            'DEL',
+        ];
+
+        return in_array($commandName, $writeCommands, true);
+    }
+
+    /**
      * Stop the server
      */
     public function stop(): void
@@ -215,5 +262,10 @@ class RedisServer
             socket_close($this->serverSocket);
             $this->serverSocket = null;
         }
+    }
+
+    public function getReplicationManager(): ReplicationManager
+    {
+        return $this->replicationManager;
     }
 }
