@@ -50,9 +50,9 @@ class ReplicaCommandProcessor
         // Process all complete commands in the buffer
         while ($this->hasCompleteCommand()) {
             try {
-                $command = $this->extractNextCommand();
-                if ($command !== null) {
-                    $this->executeReplicatedCommand($command);
+                $commandInfo = $this->extractNextCommand();
+                if ($commandInfo !== null) {
+                    $this->executeReplicatedCommand($commandInfo['command'], $commandInfo['length']);
                 }
             } catch (Exception $e) {
                 echo "Error processing replicated command: " . $e->getMessage() . PHP_EOL;
@@ -104,50 +104,43 @@ class ReplicaCommandProcessor
         $this->buffer = substr($this->buffer, $offset);
 
         if (is_array($parsed) && !empty($parsed)) {
-            // Update replication offset with the number of bytes processed
-            // But only for actual write commands, not GETACK commands
-            if (!$this->isGetAckCommand($parsed)) {
-                $this->replicationOffset += $commandLength;
-                echo "Updated replication offset to: {$this->replicationOffset}" . PHP_EOL;
-            } else {
-                echo "Not updating offset for this command (getack)" . PHP_EOL;
-            }
-            return $parsed;
+            return [
+                'command' => $parsed,
+                'length' => $commandLength
+            ];
         }
 
         return null;
     }
 
     /**
-     * Check if this is a REPLCONF GETACK command
-     */
-    private function isGetAckCommand(array $parsed): bool
-    {
-        return count($parsed) >= 2 &&
-            strtoupper($parsed[0]) === 'REPLCONF' &&
-            strtoupper($parsed[1]) === 'GETACK';
-    }
-
-    /**
      * Execute a replicated command without sending a response (unless it's REPLCONF GETACK)
      */
-    private function executeReplicatedCommand(array $commandParts): void
+    private function executeReplicatedCommand(array $commandParts, int $commandLength): void
     {
         if (empty($commandParts) || !is_string($commandParts[0])) {
             return;
         }
 
-        $commandName = array_shift($commandParts);
-        $args = $commandParts;
+        $commandName = $commandParts[0];
+        $args = array_slice($commandParts, 1);
 
         echo "Processing replicated command: {$commandName}" .
             (empty($args) ? '' : ' ' . implode(' ', $args)) . PHP_EOL;
 
-        // Handle REPLCONF GETACK specially - need to send response back to master
+        // Handle REPLCONF GETACK specially - respond BEFORE updating offset
         if (strtoupper($commandName) === 'REPLCONF' && !empty($args) && strtolower($args[0]) === 'getack') {
+            // Respond with current offset BEFORE updating it
             $this->handleGetAckCommand($args);
+            // Now update the offset to include this GETACK command
+            $this->replicationOffset += $commandLength;
+            echo "Updated replication offset to: {$this->replicationOffset} (after GETACK)" . PHP_EOL;
             return;
         }
+
+        // For all other commands, update offset first, then execute
+        $this->replicationOffset += $commandLength;
+        echo "Updated replication offset to: {$this->replicationOffset}" . PHP_EOL;
 
         // Execute other commands but don't send response (replica mode)
         try {
@@ -169,12 +162,11 @@ class ReplicaCommandProcessor
         }
 
         try {
-            // For stage XV6, we expect offset to be 0 since no write commands have been processed
-            // TODO: In later stages, this should be the actual replication offset
+            // Send back the current replication offset (before processing this GETACK)
             $response = new ArrayResponse([
                 'REPLCONF',
                 'ACK',
-                '0'  // Hardcoded to 0 for this stage
+                (string)$this->replicationOffset
             ]);
 
             $serialized = $response->serialize();
@@ -186,10 +178,20 @@ class ReplicaCommandProcessor
                         socket_last_error($this->masterSocket),
                     ) . PHP_EOL;
             } else {
-                echo "Sent REPLCONF ACK 0 to master ({$result} bytes written)" . PHP_EOL;
+                echo "Sent REPLCONF ACK {$this->replicationOffset} to master ({$result} bytes written)" . PHP_EOL;
             }
         } catch (Exception $e) {
             echo "Error sending GETACK response: " . $e->getMessage() . PHP_EOL;
         }
+    }
+
+    /**
+     * Check if this is a REPLCONF GETACK command
+     */
+    private function isGetAckCommand(array $parsed): bool
+    {
+        return count($parsed) >= 2 &&
+            strtoupper($parsed[0]) === 'REPLCONF' &&
+            strtoupper($parsed[1]) === 'GETACK';
     }
 }
