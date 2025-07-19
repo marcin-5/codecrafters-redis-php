@@ -8,9 +8,10 @@ use Socket;
 
 class ReplicationClient
 {
-    private const BUFFER_SIZE = 1024;
+    private const BUFFER_SIZE = 4096;
     private ?Socket $socket = null;
     private bool $connected = false;
+    private string $buffer = '';
 
     public function __construct(
         private readonly string $masterHost,
@@ -72,23 +73,26 @@ class ReplicationClient
 
         // Step 1: Send PING
         $this->ping();
-        $response = $this->readResponse();
+        $response = $this->readSingleResponse();
         echo 'Received PING response: ' . trim($response) . PHP_EOL;
 
         // Step 2: Send REPLCONF listening-port <PORT>
         $this->sendReplconfListeningPort();
-        $response = $this->readResponse();
+        $response = $this->readSingleResponse();
         echo 'Received REPLCONF listening-port response: ' . trim($response) . PHP_EOL;
 
         // Step 3: Send REPLCONF capa psync2
         $this->sendReplconfCapabilities();
-        $response = $this->readResponse();
+        $response = $this->readSingleResponse();
         echo 'Received REPLCONF capa response: ' . trim($response) . PHP_EOL;
 
         // Step 4: Send PSYNC ? -1
         $this->sendPsync();
-        $response = $this->readResponse();
+        $response = $this->readSingleResponse();
         echo 'Received PSYNC response: ' . trim($response) . PHP_EOL;
+
+        // Step 5: Handle RDB file that follows FULLRESYNC
+        $this->handleRdbFile();
 
         echo 'Handshake completed successfully!' . PHP_EOL;
     }
@@ -125,17 +129,68 @@ class ReplicationClient
     }
 
     /**
-     * Read response from master.
+     * Read a single RESP response (used during handshake)
      * @throws Exception
      */
-    public function readResponse(): string
+    private function readSingleResponse(): string
     {
         $this->ensureConnected();
-        $response = socket_read($this->socket, self::BUFFER_SIZE);
-        if ($response === false) {
-            throw new Exception('Failed to read response: ' . socket_strerror(socket_last_error($this->socket)));
+
+        // Keep reading until we have a complete response
+        while (true) {
+            if (empty($this->buffer)) {
+                $data = socket_read($this->socket, self::BUFFER_SIZE);
+                if ($data === false) {
+                    throw new Exception(
+                        'Failed to read response: ' . socket_strerror(socket_last_error($this->socket)),
+                    );
+                }
+
+                if ($data === '') {
+                    throw new Exception('Connection closed by master');
+                }
+
+                $this->buffer .= $data;
+            }
+
+            // Try to extract a single response
+            if ($this->buffer[0] === '+') {
+                // Simple string response
+                $crlfPos = strpos($this->buffer, "\r\n");
+                if ($crlfPos !== false) {
+                    $response = substr($this->buffer, 0, $crlfPos + 2);
+                    $this->buffer = substr($this->buffer, $crlfPos + 2);
+                    return $response;
+                }
+            } elseif ($this->buffer[0] === '-') {
+                // Error response
+                $crlfPos = strpos($this->buffer, "\r\n");
+                if ($crlfPos !== false) {
+                    $response = substr($this->buffer, 0, $crlfPos + 2);
+                    $this->buffer = substr($this->buffer, $crlfPos + 2);
+                    return $response;
+                }
+            }
+
+            // If we don't have a complete response yet, continue reading
+            if (strlen($this->buffer) < 2 || !str_contains($this->buffer, "\r\n")) {
+                $data = socket_read($this->socket, self::BUFFER_SIZE);
+                if ($data === false) {
+                    throw new Exception(
+                        'Failed to read response: ' . socket_strerror(socket_last_error($this->socket)),
+                    );
+                }
+                if ($data === '') {
+                    throw new Exception('Connection closed by master');
+                }
+                $this->buffer .= $data;
+                continue;
+            }
+
+            // For other response types, we might need more sophisticated parsing
+            // but for handshake, we only expect simple strings and errors
+            throw new Exception('Unexpected response format: ' . substr($this->buffer, 0, 10));
         }
-        return $response;
     }
 
     /**
@@ -184,6 +239,67 @@ class ReplicationClient
         ]);
         $this->sendPayload($psyncCommand->serialize(), 'PSYNC');
         echo 'Sent PSYNC ? -1 to master' . PHP_EOL;
+    }
+
+    /**
+     * Handle the RDB file that comes after FULLRESYNC response
+     * @throws Exception
+     */
+    private function handleRdbFile(): void
+    {
+        // Read the RDB file header: $<length>\r\n
+        while (true) {
+            if (empty($this->buffer)) {
+                $data = socket_read($this->socket, self::BUFFER_SIZE);
+                if ($data === false || $data === '') {
+                    throw new Exception('Failed to read RDB file header');
+                }
+                $this->buffer .= $data;
+            }
+
+            // Look for RDB file format: $<length>\r\n
+            if ($this->buffer[0] === '$') {
+                $crlfPos = strpos($this->buffer, "\r\n");
+                if ($crlfPos === false) {
+                    // Need more data for complete header
+                    continue;
+                }
+
+                $length = (int)substr($this->buffer, 1, $crlfPos - 1);
+                $dataStart = $crlfPos + 2;
+
+                // Make sure we have all the RDB data
+                while (strlen($this->buffer) < $dataStart + $length) {
+                    $data = socket_read($this->socket, self::BUFFER_SIZE);
+                    if ($data === false || $data === '') {
+                        throw new Exception('Failed to read RDB file data');
+                    }
+                    $this->buffer .= $data;
+                }
+
+                // Extract RDB data
+                $rdbData = substr($this->buffer, $dataStart, $length);
+                echo "Received and processed RDB file ({$length} bytes)" . PHP_EOL;
+
+                // Remove RDB data from buffer, keep any remaining data for further processing
+                $this->buffer = substr($this->buffer, $dataStart + $length);
+                echo "Remaining buffer after RDB: " . json_encode($this->buffer) . PHP_EOL;
+
+                break;
+            } else {
+                throw new Exception('Expected RDB file but got: ' . substr($this->buffer, 0, 10));
+            }
+        }
+    }
+
+    /**
+     * Get any buffered data that was read during handshake but not consumed
+     */
+    public function getBufferedData(): string
+    {
+        $data = $this->buffer;
+        $this->buffer = '';
+        return $data;
     }
 
     /**
