@@ -39,14 +39,9 @@ class ResponseFactory
         return new BulkStringResponse(null);
     }
 
-    public static function rdb(string $rdbData): RDBResponse
+    public static function psync(string $fullresyncMessage, string $rdbContent): PsyncResponse
     {
-        return new RDBResponse($rdbData);
-    }
-
-    public static function fullResync(string $replId, int $replOffset, string $rdbData): FullResyncResponse
-    {
-        return new FullResyncResponse($replId, $replOffset, $rdbData);
+        return new PsyncResponse($fullresyncMessage, $rdbContent);
     }
 
     // Common error responses
