@@ -183,4 +183,13 @@ class PersistentStorage implements StorageInterface
         return $this->storage->getType($key);
     }
 
+    public function xadd(string $key, string $id, array $fields): string
+    {
+        return $this->storage->xadd($key, $id, $fields);
+    }
+
+    public function getStream(string $key): ?RedisStream
+    {
+        return $this->storage->getStream($key);
+    }
 }
