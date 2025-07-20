@@ -6,11 +6,13 @@ class StreamEntryId
 {
     private int $milliseconds;
     private int $sequence;
+    private bool $autoSequence; // Flag to indicate if sequence should be auto-generated
 
-    public function __construct(int $milliseconds, int $sequence)
+    public function __construct(int $milliseconds, int $sequence, bool $autoSequence = false)
     {
         $this->milliseconds = $milliseconds;
         $this->sequence = $sequence;
+        $this->autoSequence = $autoSequence;
     }
 
     public static function parse(string $id): self
@@ -19,9 +21,16 @@ class StreamEntryId
             // Auto-generate with current timestamp
             $milliseconds = (int)(microtime(true) * 1000);
             $sequence = 0;
-            return new self($milliseconds, $sequence);
+            return new self($milliseconds, $sequence, true);
         }
 
+        // Check for <milliseconds>-* format
+        if (preg_match('/^(\d+)-\*$/', $id, $matches)) {
+            $milliseconds = (int)$matches[1];
+            return new self($milliseconds, 0, true); // sequence will be determined later
+        }
+
+        // Check for standard <milliseconds>-<sequence> format
         if (!preg_match('/^(\d+)-(\d+)$/', $id, $matches)) {
             throw new \InvalidArgumentException("ERR Invalid stream ID specified as stream command argument");
         }
@@ -29,7 +38,7 @@ class StreamEntryId
         $milliseconds = (int)$matches[1];
         $sequence = (int)$matches[2];
 
-        return new self($milliseconds, $sequence);
+        return new self($milliseconds, $sequence, false);
     }
 
     public static function zero(): self
@@ -50,6 +59,16 @@ class StreamEntryId
     public function getSequence(): int
     {
         return $this->sequence;
+    }
+
+    public function isAutoSequence(): bool
+    {
+        return $this->autoSequence;
+    }
+
+    public function withSequence(int $sequence): self
+    {
+        return new self($this->milliseconds, $sequence, false);
     }
 
     public function isGreaterThan(StreamEntryId $other): bool
