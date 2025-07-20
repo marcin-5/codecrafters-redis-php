@@ -93,4 +93,53 @@ class RedisStream
     {
         return $this->lastId;
     }
+
+    /**
+     * Retrieves a range of entries from the stream.
+     *
+     * @param string $start Start ID (inclusive)
+     * @param string $end End ID (inclusive)
+     * @param int|null $count Optional count limit
+     * @return array Associative array of entry IDs to field-value maps
+     */
+    public function range(string $start, string $end, ?int $count = null): array
+    {
+        $startId = StreamEntryId::parse($start);
+        $endId = StreamEntryId::parse($end);
+
+        return $this->filterEntriesInRange($startId, $endId, $count);
+    }
+
+    /**
+     * Filters entries within the specified range.
+     */
+    private function filterEntriesInRange(StreamEntryId $startId, StreamEntryId $endId, ?int $count): array
+    {
+        $result = [];
+        $counter = 0;
+
+        foreach ($this->entries as $idStr => $fields) {
+            $entryId = StreamEntryId::parse($idStr);
+
+            if ($this->isEntryInRange($entryId, $startId, $endId)) {
+                $result[$idStr] = $fields;
+                $counter++;
+
+                if ($count !== null && $counter >= $count) {
+                    break;
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Checks if an entry is within the specified range (inclusive).
+     */
+    private function isEntryInRange(StreamEntryId $entryId, StreamEntryId $startId, StreamEntryId $endId): bool
+    {
+        return ($entryId->isGreaterThan($startId) || $entryId->equals($startId)) &&
+            ($endId->isGreaterThan($entryId) || $entryId->equals($endId));
+    }
 }
