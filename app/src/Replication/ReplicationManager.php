@@ -109,8 +109,12 @@ class ReplicationManager
         $targetOffset = $this->masterOffset;
         echo "Waiting for $numReplicas replicas to reach offset $targetOffset (timeout: {$timeoutMs}ms)" . PHP_EOL;
 
+        // If no write commands have been executed (offset is 0),
+        // return the actual number of connected replicas (they're all synchronized)
         if ($targetOffset === 0) {
-            return min($numReplicas, count($this->replicas));
+            $connectedCount = count($this->replicas);
+            echo "No write commands executed, returning $connectedCount connected replicas" . PHP_EOL;
+            return $connectedCount;
         }
 
         $this->sendGetAckToAllReplicas();
