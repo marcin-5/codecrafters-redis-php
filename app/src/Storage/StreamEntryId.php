@@ -2,43 +2,35 @@
 
 namespace Redis\Storage;
 
-class StreamEntryId
+readonly class StreamEntryId
 {
-    private int $milliseconds;
-    private int $sequence;
-    private bool $autoSequence; // Flag to indicate if sequence should be auto-generated
-
-    public function __construct(int $milliseconds, int $sequence, bool $autoSequence = false)
-    {
-        $this->milliseconds = $milliseconds;
-        $this->sequence = $sequence;
-        $this->autoSequence = $autoSequence;
+    public function __construct(
+        private int $milliseconds,
+        private int $sequence,
+        private bool $autoSequence = false,
+    ) {
     }
 
     public static function parse(string $id): self
     {
         if ($id === '*') {
             // Auto-generate with current timestamp
-            $milliseconds = (int)(microtime(true) * 1000);
-            $sequence = 0;
-            return new self($milliseconds, $sequence, true);
+            return new self((int)(microtime(true) * 1000), 0, true);
         }
 
-        // Check for <milliseconds>-* format
-        if (preg_match('/^(\d+)-\*$/', $id, $matches)) {
+        // Check for <milliseconds>-* or <milliseconds>-<sequence> format
+        if (preg_match('/^(\d+)-(\*|\d+)$/', $id, $matches)) {
             $milliseconds = (int)$matches[1];
-            return new self($milliseconds, 0, true); // sequence will be determined later
+            $sequencePart = $matches[2];
+
+            if ($sequencePart === '*') {
+                return new self($milliseconds, 0, true);
+            }
+
+            return new self($milliseconds, (int)$sequencePart);
         }
 
-        // Check for standard <milliseconds>-<sequence> format
-        if (!preg_match('/^(\d+)-(\d+)$/', $id, $matches)) {
-            throw new \InvalidArgumentException("ERR Invalid stream ID specified as stream command argument");
-        }
-
-        $milliseconds = (int)$matches[1];
-        $sequence = (int)$matches[2];
-
-        return new self($milliseconds, $sequence, false);
+        throw new \InvalidArgumentException("ERR Invalid stream ID specified as stream command argument");
     }
 
     public static function zero(): self
@@ -68,20 +60,12 @@ class StreamEntryId
 
     public function withSequence(int $sequence): self
     {
-        return new self($this->milliseconds, $sequence, false);
+        return new self($this->milliseconds, $sequence);
     }
 
     public function isGreaterThan(StreamEntryId $other): bool
     {
-        if ($this->milliseconds > $other->milliseconds) {
-            return true;
-        }
-
-        if ($this->milliseconds === $other->milliseconds) {
-            return $this->sequence > $other->sequence;
-        }
-
-        return false;
+        return ([$this->milliseconds, $this->sequence] <=> [$other->milliseconds, $other->sequence]) > 0;
     }
 
     public function equals(StreamEntryId $other): bool
