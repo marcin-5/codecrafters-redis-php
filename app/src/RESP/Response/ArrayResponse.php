@@ -41,6 +41,9 @@ class ArrayResponse implements RESPResponse
             return new IntegerResponse($value);
         } elseif (is_null($value)) {
             return new BulkStringResponse(null);
+        } elseif (is_array($value)) {
+            // Recursively handle nested arrays
+            return new ArrayResponse($value);
         } else {
             return new SimpleStringResponse((string)$value);
         }
