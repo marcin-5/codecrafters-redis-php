@@ -173,7 +173,7 @@ class RedisServer
     /**
      * Disconnect a client
      */
-    private function disconnectClient(Socket $clientSocket, string $reason): void
+    private function disconnectClient(Socket $clientSocket): void
     {
         $socketId = spl_object_id($clientSocket);
         echo "Client disconnected: {$socketId}" . PHP_EOL;
