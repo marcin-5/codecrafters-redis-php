@@ -20,17 +20,21 @@ use Redis\Commands\XReadCommand;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
 use Redis\Storage\StorageFactory;
+use Redis\Storage\StorageInterface;
 
 class CommandRegistry
 {
     private array $commands = [];
 
+    private function __construct(private readonly StorageInterface $storage)
+    {
+    }
+
     public static function createWithDefaults(array $config = [], $replicationManager = null): self
     {
-        $registry = new self();
-
         // Create shared storage instance
         $storage = StorageFactory::createStorage($config);
+        $registry = new self($storage);
 
         // Register commands, injecting storage where needed
         $registry->register('PING', new PingCommand());
@@ -58,6 +62,16 @@ class CommandRegistry
     public function register(string $name, RedisCommand $command): void
     {
         $this->commands[strtoupper($name)] = $command;
+    }
+
+    public function getStorage(): StorageInterface
+    {
+        return $this->storage;
+    }
+
+    public function getCommand(string $name): ?RedisCommand
+    {
+        return $this->commands[strtoupper($name)] ?? null;
     }
 
     public function execute(string $commandName, array $args): RESPResponse
