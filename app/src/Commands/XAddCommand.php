@@ -31,6 +31,11 @@ class XAddCommand implements RedisCommand
         $streamKey = $args[0];
         $id = $args[1];
 
+        // Validate that we have at least one field-value pair
+        if ($argCount === 2) {
+            return ResponseFactory::error("ERR wrong number of arguments for 'xadd' command");
+        }
+
         // Parse field-value pairs
         $fields = [];
         for ($i = 2; $i < $argCount; $i += 2) {
@@ -42,8 +47,10 @@ class XAddCommand implements RedisCommand
         try {
             $entryId = $this->storage->xadd($streamKey, $id, $fields);
             return ResponseFactory::string($entryId);
-        } catch (\Exception $e) {
+        } catch (\InvalidArgumentException $e) {
             return ResponseFactory::error($e->getMessage());
+        } catch (\Exception $e) {
+            return ResponseFactory::error("ERR " . $e->getMessage());
         }
     }
 }
