@@ -6,10 +6,10 @@ use Redis\Replication\ReplicationManager;
 use Redis\RESP\Response\IntegerResponse;
 use Redis\RESP\Response\RESPResponse;
 
-class WaitCommand implements RedisCommand
+readonly class WaitCommand implements RedisCommand
 {
     public function __construct(
-        private readonly ReplicationManager $replicationManager,
+        private ReplicationManager $replicationManager,
     ) {
     }
 
@@ -26,11 +26,9 @@ class WaitCommand implements RedisCommand
         // Get the current number of connected replicas
         $connectedReplicas = $this->replicationManager->getReplicaCount();
 
-        // If no replicas are requested or no replicas are connected, return immediately
-        if ($numReplicas === 0 || $connectedReplicas === 0) {
-            return new IntegerResponse($connectedReplicas);
-        }
-
-        return new IntegerResponse(min($numReplicas, $connectedReplicas));
+        // Always return the actual number of connected replicas
+        // Even if WAIT is called with a number lesser than the number of connected replicas,
+        // the master should return the count of connected replicas
+        return new IntegerResponse($connectedReplicas);
     }
 }
