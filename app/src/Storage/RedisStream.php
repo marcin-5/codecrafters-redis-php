@@ -3,6 +3,7 @@
 namespace Redis\Storage;
 
 use InvalidArgumentException;
+use Redis\Utils\StreamResultFormatter;
 
 class RedisStream
 {
@@ -16,7 +17,7 @@ class RedisStream
      * @param array $streamKeys Array of stream keys
      * @param array $ids Array of IDs to read after (one for each stream key)
      * @param int|null $count Optional count limit
-     * @param callable $getStreamCallback Callback to get stream by key
+     * @param callable(string): ?RedisStream $getStreamCallback Callback to get stream by key
      * @return array Array of results in XREAD format
      */
     public static function read(array $streamKeys, array $ids, ?int $count, callable $getStreamCallback): array
@@ -30,7 +31,7 @@ class RedisStream
             }
             $streamEntries = $stream->readAfter($streamId, $count);
             if (!empty($streamEntries)) {
-                $results[] = [$streamKey, \Redis\Utils\StreamResultFormatter::format($streamEntries)];
+                $results[] = [$streamKey, StreamResultFormatter::format($streamEntries)];
             }
         }
         return $results;
@@ -50,7 +51,10 @@ class RedisStream
         if ($startId === null) {
             return [];
         }
-        return $this->filterEntriesAfter($startId, $count);
+        return $this->filterEntries(
+            fn(StreamEntryId $entryId): bool => $entryId->isGreaterThan($startId),
+            $count,
+        );
     }
 
     /**
@@ -62,17 +66,6 @@ class RedisStream
             return $this->lastId; // Can be null if stream is empty
         }
         return StreamEntryId::parse($afterId);
-    }
-
-    /**
-     * Filters entries that come after the specified ID (exclusive).
-     */
-    private function filterEntriesAfter(StreamEntryId $startId, ?int $count): array
-    {
-        return $this->filterEntries(
-            fn(StreamEntryId $entryId): bool => $entryId->isGreaterThan($startId),
-            $count,
-        );
     }
 
     /**
@@ -93,37 +86,6 @@ class RedisStream
             }
         }
         return $result;
-    }
-
-    /**
-     * Reads entries from multiple streams starting after the specified IDs.
-     * This method handles the logic for XREAD command.
-     *
-     * @param array $streamKeys Array of stream keys
-     * @param array $ids Array of IDs to read after (one for each stream key)
-     * @param int|null $count Optional count limit
-     * @param callable $getStreamCallback Callback to get stream by key
-     * @return array Array of results in XREAD format
-     */
-    public static function readFromStreams(
-        array $streamKeys,
-        array $ids,
-        ?int $count,
-        callable $getStreamCallback,
-    ): array {
-        $results = [];
-        foreach ($streamKeys as $index => $streamKey) {
-            $streamId = $ids[$index];
-            $stream = $getStreamCallback($streamKey);
-            if ($stream === null) {
-                continue; // Skip non-existent streams
-            }
-            $streamEntries = $stream->readAfter($streamId, $count);
-            if (!empty($streamEntries)) {
-                $results[] = [$streamKey, \Redis\Utils\StreamResultFormatter::format($streamEntries)];
-            }
-        }
-        return $results;
     }
 
     public function addEntry(string $id, array $fields): string
@@ -149,9 +111,7 @@ class RedisStream
     private function generateAutoSequenceId(StreamEntryId $requestedId, bool $isTimestampAuto): StreamEntryId
     {
         if ($this->lastId === null) {
-            // First entry. `0-0` is invalid, so for a timestamp of 0, the sequence must be at least 1.
-            $sequence = ($requestedId->getMilliseconds() === 0) ? 1 : 0;
-            return $requestedId->withSequence($sequence);
+            return $this->generateFirstAutoSequenceId($requestedId);
         }
         $requestedMilliseconds = $requestedId->getMilliseconds();
         $lastMilliseconds = $this->lastId->getMilliseconds();
@@ -168,6 +128,16 @@ class RedisStream
         throw new InvalidArgumentException(
             "ERR The ID specified in XADD is equal or smaller than the target stream top item",
         );
+    }
+
+    /**
+     * Generates the first ID for a stream with an auto-sequence component.
+     */
+    private function generateFirstAutoSequenceId(StreamEntryId $requestedId): StreamEntryId
+    {
+        // First entry. `0-0` is invalid, so for a timestamp of 0, the sequence must be at least 1.
+        $sequence = ($requestedId->getMilliseconds() === 0) ? 1 : 0;
+        return $requestedId->withSequence($sequence);
     }
 
     private function validateExplicitId(StreamEntryId $entryId): StreamEntryId
@@ -215,26 +185,13 @@ class RedisStream
     {
         $startId = StreamEntryId::parse($start);
         $endId = StreamEntryId::parse($end);
-        return $this->filterEntriesInRange($startId, $endId, $count);
-    }
 
-    /**
-     * Filters entries within the specified range.
-     */
-    private function filterEntriesInRange(StreamEntryId $startId, StreamEntryId $endId, ?int $count): array
-    {
-        return $this->filterEntries(
-            fn(StreamEntryId $entryId): bool => $this->isEntryInRange($entryId, $startId, $endId),
-            $count,
-        );
-    }
+        $predicate = static function (StreamEntryId $entryId) use ($startId, $endId): bool {
+            $isAfterStart = $entryId->isGreaterThan($startId) || $entryId->equals($startId);
+            $isBeforeEnd = $endId->isGreaterThan($entryId) || $entryId->equals($endId);
+            return $isAfterStart && $isBeforeEnd;
+        };
 
-    /**
-     * Checks if an entry is within the specified range (inclusive).
-     */
-    private function isEntryInRange(StreamEntryId $entryId, StreamEntryId $startId, StreamEntryId $endId): bool
-    {
-        return ($entryId->isGreaterThan($startId) || $entryId->equals($startId)) &&
-            ($endId->isGreaterThan($entryId) || $entryId->equals($endId));
+        return $this->filterEntries($predicate, $count);
     }
 }

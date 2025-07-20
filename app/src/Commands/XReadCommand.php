@@ -24,7 +24,7 @@ class XReadCommand implements RedisCommand
     {
         try {
             [$streamKeys, $ids, $count] = $this->parseArguments($args);
-            $results = RedisStream::readFromStreams(
+            $results = RedisStream::read(
                 $streamKeys,
                 $ids,
                 $count,
