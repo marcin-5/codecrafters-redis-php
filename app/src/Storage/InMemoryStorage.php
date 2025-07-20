@@ -40,6 +40,30 @@ class InMemoryStorage implements StorageInterface
         return array_keys($this->data);
     }
 
+    private function hasExpired(string $key): bool
+    {
+        if (!isset($this->expiry[$key])) {
+            return false;
+        }
+
+        $currentTime = (int)(microtime(true) * 1000);
+        return $currentTime >= $this->expiry[$key];
+    }
+
+    public function delete(string $key): bool
+    {
+        $existed = isset($this->data[$key]);
+
+        if ($existed) {
+            unset($this->data[$key]);
+        }
+
+        // Also remove expiry
+        unset($this->expiry[$key]);
+
+        return $existed;
+    }
+
     public function getType(string $key): string
     {
         if (!$this->exists($key)) {
@@ -96,28 +120,16 @@ class InMemoryStorage implements StorageInterface
         return $this->data[$key] ?? null;
     }
 
-    private function hasExpired(string $key): bool
+    public function xrange(string $key, string $start, string $end, ?int $count = null): array
     {
-        if (!isset($this->expiry[$key])) {
-            return false;
+        $stream = $this->getStream($key);
+
+        if ($stream === null) {
+            // Return empty array if stream doesn't exist
+            return [];
         }
 
-        $currentTime = (int)(microtime(true) * 1000);
-        return $currentTime >= $this->expiry[$key];
-    }
-
-    public function delete(string $key): bool
-    {
-        $existed = isset($this->data[$key]);
-
-        if ($existed) {
-            unset($this->data[$key]);
-        }
-
-        // Also remove expiry
-        unset($this->expiry[$key]);
-
-        return $existed;
+        return $stream->range($start, $end, $count);
     }
 
     /**
