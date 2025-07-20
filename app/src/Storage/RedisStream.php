@@ -95,6 +95,37 @@ class RedisStream
         return $result;
     }
 
+    /**
+     * Reads entries from multiple streams starting after the specified IDs.
+     * This method handles the logic for XREAD command.
+     *
+     * @param array $streamKeys Array of stream keys
+     * @param array $ids Array of IDs to read after (one for each stream key)
+     * @param int|null $count Optional count limit
+     * @param callable $getStreamCallback Callback to get stream by key
+     * @return array Array of results in XREAD format
+     */
+    public static function readFromStreams(
+        array $streamKeys,
+        array $ids,
+        ?int $count,
+        callable $getStreamCallback,
+    ): array {
+        $results = [];
+        foreach ($streamKeys as $index => $streamKey) {
+            $streamId = $ids[$index];
+            $stream = $getStreamCallback($streamKey);
+            if ($stream === null) {
+                continue; // Skip non-existent streams
+            }
+            $streamEntries = $stream->readAfter($streamId, $count);
+            if (!empty($streamEntries)) {
+                $results[] = [$streamKey, \Redis\Utils\StreamResultFormatter::format($streamEntries)];
+            }
+        }
+        return $results;
+    }
+
     public function addEntry(string $id, array $fields): string
     {
         $finalId = $this->resolveEntryId($id);

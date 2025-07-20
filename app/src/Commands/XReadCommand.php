@@ -6,8 +6,8 @@ use InvalidArgumentException;
 use Redis\RESP\Response\ArrayResponse;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
+use Redis\Storage\RedisStream;
 use Redis\Storage\StorageInterface;
-use Redis\Utils\StreamResultFormatter;
 
 class XReadCommand implements RedisCommand
 {
@@ -22,15 +22,14 @@ class XReadCommand implements RedisCommand
 
     public function execute(array $args): RESPResponse
     {
-        $parseResult = $this->parseArguments($args);
-        if ($parseResult instanceof RESPResponse) {
-            return $parseResult; // Return error response
-        }
-
-        [$streamKeys, $ids, $count] = $parseResult;
-
         try {
-            $results = $this->readFromStreams($streamKeys, $ids, $count);
+            [$streamKeys, $ids, $count] = $this->parseArguments($args);
+            $results = RedisStream::readFromStreams(
+                $streamKeys,
+                $ids,
+                $count,
+                fn($key) => $this->storage->getStream($key),
+            );
             return new ArrayResponse($results);
         } catch (InvalidArgumentException $e) {
             return ResponseFactory::error($e->getMessage());
@@ -39,44 +38,25 @@ class XReadCommand implements RedisCommand
         }
     }
 
-    private function parseArguments(array $args): array|RESPResponse
+    /**
+     * @throws InvalidArgumentException
+     */
+    private function parseArguments(array $args): array
     {
         if (count($args) < self::MIN_ARGS_COUNT) {
-            return ResponseFactory::wrongNumberOfArguments(self::COMMAND_NAME);
+            throw new InvalidArgumentException(
+                "ERR wrong number of arguments for '" . self::COMMAND_NAME . "' command",
+            );
         }
-
-        $count = $this->parseCountArgument($args);
-        if ($count instanceof RESPResponse) {
-            return $count;
-        }
-
         $streamsIndex = $this->findStreamsKeywordIndex($args);
         if ($streamsIndex === null) {
-            return ResponseFactory::syntaxError();
+            throw new InvalidArgumentException('ERR syntax error');
         }
-
-        return $this->parseStreamKeysAndIds($args, $streamsIndex, $count);
-    }
-
-    private function parseCountArgument(array $args): int|null|RESPResponse
-    {
-        $argCount = count($args);
-        for ($i = 0; $i < $argCount - 2; $i++) {
-            if (strtoupper($args[$i]) === self::COUNT_KEYWORD) {
-                if ($i + 1 >= $argCount) {
-                    return ResponseFactory::syntaxError();
-                }
-                if (!is_numeric($args[$i + 1])) {
-                    return ResponseFactory::error("ERR value is not an integer or out of range");
-                }
-                $count = (int)$args[$i + 1];
-                if ($count < 0) {
-                    return ResponseFactory::error("ERR COUNT can't be negative");
-                }
-                return $count;
-            }
-        }
-        return null;
+        $optionsArgs = array_slice($args, 0, $streamsIndex);
+        $streamAndIdArgs = array_slice($args, $streamsIndex + 1);
+        $count = $this->parseCountArgument($optionsArgs);
+        [$streamKeys, $ids] = $this->parseStreamKeysAndIds($streamAndIdArgs);
+        return [$streamKeys, $ids, $count];
     }
 
     private function findStreamsKeywordIndex(array $args): ?int
@@ -89,44 +69,50 @@ class XReadCommand implements RedisCommand
         return null;
     }
 
-    private function parseStreamKeysAndIds(array $args, int $streamsIndex, ?int $count): array|RESPResponse
+    /**
+     * @throws InvalidArgumentException
+     */
+    private function parseCountArgument(array $optionsArgs): ?int
     {
-        $remainingArgs = array_slice($args, $streamsIndex + 1);
-        $remainingCount = count($remainingArgs);
+        $count = null;
+        for ($i = 0; $i < count($optionsArgs); $i++) {
+            if (strtoupper($optionsArgs[$i]) === self::COUNT_KEYWORD) {
+                if ($count !== null) {
+                    throw new InvalidArgumentException('ERR syntax error');
+                }
+                if (!isset($optionsArgs[$i + 1])) {
+                    throw new InvalidArgumentException('ERR syntax error');
+                }
+                $countValue = $optionsArgs[$i + 1];
+                if (!is_numeric($countValue)) {
+                    throw new InvalidArgumentException('ERR value is not an integer or out of range');
+                }
+                $count = (int)$countValue;
+                if ($count < 0) {
+                    throw new InvalidArgumentException("ERR COUNT can't be negative");
+                }
+                $i++; // Skip the value part
+            } else {
+                throw new InvalidArgumentException('ERR syntax error');
+            }
+        }
+        return $count;
+    }
 
+    /**
+     * @throws InvalidArgumentException
+     */
+    private function parseStreamKeysAndIds(array $args): array
+    {
+        $remainingCount = count($args);
         if ($remainingCount === 0 || $remainingCount % 2 !== 0) {
-            return ResponseFactory::error(
+            throw new InvalidArgumentException(
                 "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
             );
         }
-
         $streamCount = $remainingCount / 2;
-        $streamKeys = array_slice($remainingArgs, 0, $streamCount);
-        $ids = array_slice($remainingArgs, $streamCount);
-
-        return [$streamKeys, $ids, $count];
-    }
-
-    private function readFromStreams(array $streamKeys, array $ids, ?int $count): array
-    {
-        $results = [];
-        foreach ($streamKeys as $index => $streamKey) {
-            $id = $ids[$index];
-
-            $stream = $this->storage->getStream($streamKey);
-            if ($stream === null) {
-                continue; // Skip non-existent streams
-            }
-
-            try {
-                $streamResults = $stream->readAfter($id, $count);
-                if (!empty($streamResults)) {
-                    $results[] = [$streamKey, StreamResultFormatter::format($streamResults)];
-                }
-            } catch (InvalidArgumentException $e) {
-                throw new InvalidArgumentException("ERR Invalid stream ID specified as stream command argument");
-            }
-        }
-        return $results;
+        $streamKeys = array_slice($args, 0, $streamCount);
+        $ids = array_slice($args, $streamCount);
+        return [$streamKeys, $ids];
     }
 }
