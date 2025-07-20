@@ -21,14 +21,19 @@ readonly class WaitCommand implements RedisCommand
         }
 
         $numReplicas = (int)$args[0];
-        $timeout = (int)$args[1];
+        $timeoutMs = (int)$args[1];
 
-        // Get the current number of connected replicas
-        $connectedReplicas = $this->replicationManager->getReplicaCount();
+        echo "WAIT command: requesting $numReplicas replicas, timeout {$timeoutMs}ms" . PHP_EOL;
 
-        // Always return the actual number of connected replicas
-        // Even if WAIT is called with a number lesser than the number of connected replicas,
-        // the master should return the count of connected replicas
-        return new IntegerResponse($connectedReplicas);
+        // If 0 replicas requested, return immediately
+        if ($numReplicas === 0) {
+            return new IntegerResponse(0);
+        }
+
+        // Wait for acknowledgments from replicas
+        $acknowledgedCount = $this->replicationManager->waitForAcknowledgments($numReplicas, $timeoutMs);
+
+        echo "WAIT result: $acknowledgedCount replicas acknowledged" . PHP_EOL;
+        return new IntegerResponse($acknowledgedCount);
     }
 }
