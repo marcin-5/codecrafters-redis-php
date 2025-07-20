@@ -3,9 +3,12 @@
 namespace Redis\Server;
 
 use Exception;
+use Redis\Commands\XAddCommand;
+use Redis\Commands\XReadCommand;
 use Redis\Registry\CommandRegistry;
 use Redis\Replication\ReplicaCommandProcessor;
 use Redis\Replication\ReplicationManager;
+use Redis\RESP\Response\BlockingWaitResponse;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\RESPParser;
 use Socket;
@@ -20,6 +23,7 @@ class RedisServer
     /** @var array<int, ReplicaCommandProcessor> */
     private array $replicaProcessors = [];
     private bool $running = false;
+    private ClientWaitingManager $waitingManager;
 
     public function __construct(
         private readonly string $host,
@@ -28,6 +32,7 @@ class RedisServer
         private readonly CommandRegistry $registry,
         private readonly ReplicationManager $replicationManager,
     ) {
+        $this->waitingManager = new ClientWaitingManager();
     }
 
     /**
@@ -98,6 +103,7 @@ class RedisServer
     {
         while ($this->running) {
             $this->handleSocketActivity();
+            $this->handleWaitingClientTimeouts();
         }
     }
 
@@ -182,6 +188,10 @@ class RedisServer
         unset($this->clients[$socketId]);
         unset($this->replicaProcessors[$socketId]);
         $this->replicationManager->removeReplica($clientSocket);
+
+        // Remove client from waiting list
+        $this->waitingManager->removeClientSocket($clientSocket);
+
         socket_close($clientSocket);
     }
 
@@ -206,8 +216,34 @@ class RedisServer
             $commandName = strtolower(array_shift($parsedCommand));
             $args = $parsedCommand;
 
+            // Set up waiting manager for XREAD and XADD commands
+            $command = $this->registry->getCommand($commandName);
+            if ($command instanceof XReadCommand) {
+                $command->setClientSocket($clientSocket);
+                $command->setWaitingManager($this->waitingManager);
+            }
+
             $response = $this->registry->execute($commandName, $args);
+
+            // Handle blocking wait response
+            if ($response instanceof BlockingWaitResponse) {
+                // Client is now waiting, don't send response yet
+                return;
+            }
+
             $this->sendResponse($clientSocket, $response);
+
+            // Handle notifications for XADD command
+            if ($command instanceof XAddCommand) {
+                $notifiedClients = $this->waitingManager->checkAndNotifyWaitingClients(
+                    $args[0], // stream key
+                    $this->registry->getStorage(),
+                );
+
+                foreach ($notifiedClients as $clientInfo) {
+                    $this->sendResponse($clientInfo['socket'], $clientInfo['response']);
+                }
+            }
 
             // Handle replication state changes and command propagation
             $this->handleReplicationForCommand($clientSocket, $commandName, $args);
@@ -260,6 +296,7 @@ class RedisServer
             'EXPIRE',
             'FLUSHALL',
             'FLUSHDB',
+            'XADD', // Add XADD as a write command
         ];
 
         return in_array($commandName, $writeCommands, true);
@@ -272,6 +309,18 @@ class RedisServer
     {
         $errorResponse = ResponseFactory::error('ERR ' . $message);
         $this->sendResponse($clientSocket, $errorResponse);
+    }
+
+    /**
+     * Handle timeouts for waiting clients
+     */
+    private function handleWaitingClientTimeouts(): void
+    {
+        $timedOutClients = $this->waitingManager->checkTimeouts();
+
+        foreach ($timedOutClients as $clientInfo) {
+            $this->sendResponse($clientInfo['socket'], $clientInfo['response']);
+        }
     }
 
     /**

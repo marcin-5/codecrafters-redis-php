@@ -46,6 +46,7 @@ class XAddCommand implements RedisCommand
 
         try {
             $entryId = $this->storage->xadd($streamKey, $id, $fields);
+
             return ResponseFactory::string($entryId);
         } catch (\InvalidArgumentException $e) {
             return ResponseFactory::error($e->getMessage());

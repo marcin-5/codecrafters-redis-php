@@ -4,33 +4,86 @@ namespace Redis\Commands;
 
 use InvalidArgumentException;
 use Redis\RESP\Response\ArrayResponse;
+use Redis\RESP\Response\BlockingWaitResponse;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
+use Redis\Server\ClientWaitingManager;
 use Redis\Storage\RedisStream;
 use Redis\Storage\StorageInterface;
+use Socket;
 
 class XReadCommand implements RedisCommand
 {
     private const string COMMAND_NAME = 'xread';
     private const int MIN_ARGS_COUNT = 3; // STREAMS stream_key id
     private const string COUNT_KEYWORD = 'COUNT';
+    private const string BLOCK_KEYWORD = 'BLOCK';
     private const string STREAMS_KEYWORD = 'STREAMS';
+
+    private ?Socket $clientSocket = null;
+    private ?ClientWaitingManager $waitingManager = null;
 
     public function __construct(private readonly StorageInterface $storage)
     {
     }
 
+    public function setClientSocket(Socket $clientSocket): void
+    {
+        $this->clientSocket = $clientSocket;
+    }
+
+    public function setWaitingManager(ClientWaitingManager $waitingManager): void
+    {
+        $this->waitingManager = $waitingManager;
+    }
+
     public function execute(array $args): RESPResponse
     {
         try {
-            [$streamKeys, $ids, $count] = $this->parseArguments($args);
+            [$streamKeys, $ids, $count, $blockTimeout] = $this->parseArguments($args);
+
+            // Non-blocking read
+            if ($blockTimeout === null) {
+                $results = RedisStream::read(
+                    $streamKeys,
+                    $ids,
+                    $count,
+                    fn($key) => $this->storage->getStream($key),
+                );
+                return new ArrayResponse($results);
+            }
+
+            // Blocking read - try immediate read first
             $results = RedisStream::read(
                 $streamKeys,
                 $ids,
                 $count,
                 fn($key) => $this->storage->getStream($key),
             );
-            return new ArrayResponse($results);
+
+            // If we have results, return them immediately
+            if (!empty($results)) {
+                return new ArrayResponse($results);
+            }
+
+            // No immediate results - register client as waiting
+            if ($this->clientSocket && $this->waitingManager) {
+                $this->waitingManager->addWaitingClient(
+                    $this->clientSocket,
+                    $streamKeys,
+                    $ids,
+                    $count,
+                    $blockTimeout,
+                );
+
+                // Return special marker indicating client is now waiting
+                // This will be handled by the server to not send a response yet
+                return new BlockingWaitResponse();
+            }
+
+            // If a blocking read is requested but the waiting manager isn't configured,
+            // return null as if the request timed out immediately.
+            return ResponseFactory::null();
         } catch (InvalidArgumentException $e) {
             return ResponseFactory::error($e->getMessage());
         } catch (\Exception $e) {
@@ -48,15 +101,19 @@ class XReadCommand implements RedisCommand
                 "ERR wrong number of arguments for '" . self::COMMAND_NAME . "' command",
             );
         }
+
         $streamsIndex = $this->findStreamsKeywordIndex($args);
         if ($streamsIndex === null) {
             throw new InvalidArgumentException('ERR syntax error');
         }
+
         $optionsArgs = array_slice($args, 0, $streamsIndex);
         $streamAndIdArgs = array_slice($args, $streamsIndex + 1);
-        $count = $this->parseCountArgument($optionsArgs);
+
+        [$count, $blockTimeout] = $this->parseOptionsArguments($optionsArgs);
         [$streamKeys, $ids] = $this->parseStreamKeysAndIds($streamAndIdArgs);
-        return [$streamKeys, $ids, $count];
+
+        return [$streamKeys, $ids, $count, $blockTimeout];
     }
 
     private function findStreamsKeywordIndex(array $args): ?int
@@ -72,11 +129,15 @@ class XReadCommand implements RedisCommand
     /**
      * @throws InvalidArgumentException
      */
-    private function parseCountArgument(array $optionsArgs): ?int
+    private function parseOptionsArguments(array $optionsArgs): array
     {
         $count = null;
+        $blockTimeout = null;
+
         for ($i = 0; $i < count($optionsArgs); $i++) {
-            if (strtoupper($optionsArgs[$i]) === self::COUNT_KEYWORD) {
+            $keyword = strtoupper($optionsArgs[$i]);
+
+            if ($keyword === self::COUNT_KEYWORD) {
                 if ($count !== null) {
                     throw new InvalidArgumentException('ERR syntax error');
                 }
@@ -92,11 +153,28 @@ class XReadCommand implements RedisCommand
                     throw new InvalidArgumentException("ERR COUNT can't be negative");
                 }
                 $i++; // Skip the value part
+            } elseif ($keyword === self::BLOCK_KEYWORD) {
+                if ($blockTimeout !== null) {
+                    throw new InvalidArgumentException('ERR syntax error');
+                }
+                if (!isset($optionsArgs[$i + 1])) {
+                    throw new InvalidArgumentException('ERR syntax error');
+                }
+                $blockValue = $optionsArgs[$i + 1];
+                if (!is_numeric($blockValue)) {
+                    throw new InvalidArgumentException('ERR timeout is not an integer or out of range');
+                }
+                $blockTimeout = (int)$blockValue;
+                if ($blockTimeout < 0) {
+                    throw new InvalidArgumentException("ERR timeout is negative");
+                }
+                $i++; // Skip the value part
             } else {
                 throw new InvalidArgumentException('ERR syntax error');
             }
         }
-        return $count;
+
+        return [$count, $blockTimeout];
     }
 
     /**
