@@ -12,6 +12,7 @@ use Redis\Commands\PsyncCommand;
 use Redis\Commands\RedisCommand;
 use Redis\Commands\ReplconfCommand;
 use Redis\Commands\SetCommand;
+use Redis\Commands\TypeCommand;
 use Redis\Commands\WaitCommand;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
@@ -33,6 +34,7 @@ class CommandRegistry
         $registry->register('ECHO', new EchoCommand());
         $registry->register('SET', new SetCommand($storage));
         $registry->register('GET', new GetCommand($storage));
+        $registry->register('TYPE', new TypeCommand($storage));
         $registry->register('CONFIG', new ConfigGetCommand($config));
         $registry->register('KEYS', new KeysCommand($storage));
         $registry->register('INFO', new InfoCommand());
