@@ -16,6 +16,7 @@ use Redis\Commands\TypeCommand;
 use Redis\Commands\WaitCommand;
 use Redis\Commands\XAddCommand;
 use Redis\Commands\XRangeCommand;
+use Redis\Commands\XReadCommand;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
 use Redis\Storage\StorageFactory;
@@ -44,6 +45,7 @@ class CommandRegistry
         $registry->register('PSYNC', new PsyncCommand());
         $registry->register('XADD', new XAddCommand($storage));
         $registry->register('XRANGE', new XRangeCommand($storage));
+        $registry->register('XREAD', new XReadCommand($storage));
 
         // Register WAIT command if replication manager is provided
         if ($replicationManager !== null) {
