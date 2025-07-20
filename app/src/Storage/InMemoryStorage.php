@@ -21,6 +21,70 @@ class InMemoryStorage implements StorageInterface
         return true;
     }
 
+    public function clear(): bool
+    {
+        $this->data = [];
+        $this->expiry = [];
+        return true;
+    }
+
+    public function keys(): array
+    {
+        // Lazily purge expired keys
+        foreach (array_keys($this->expiry) as $key) {
+            if ($this->hasExpired($key)) {
+                $this->delete($key);
+            }
+        }
+
+        return array_keys($this->data);
+    }
+
+    public function getType(string $key): string
+    {
+        if (!$this->exists($key)) {
+            return 'none';
+        }
+
+        $value = $this->data[$key];
+
+        if (is_string($value)) {
+            return 'string';
+        } elseif ($value instanceof RedisStream) {
+            return 'stream';
+        }
+
+        return '';
+    }
+
+    public function exists(string $key): bool
+    {
+        if ($this->hasExpired($key)) {
+            $this->delete($key);
+            return false;
+        }
+
+        return array_key_exists($key, $this->data);
+    }
+
+    public function xadd(string $key, string $id, array $fields): string
+    {
+        // Get existing stream or create new one
+        $stream = $this->getStream($key);
+        if ($stream === null) {
+            $stream = new RedisStream();
+            $this->data[$key] = $stream;
+        }
+
+        return $stream->addEntry($id, $fields);
+    }
+
+    public function getStream(string $key): ?RedisStream
+    {
+        $value = $this->get($key);
+        return ($value instanceof RedisStream) ? $value : null;
+    }
+
     public function get(string $key): mixed
     {
         // Check if key has expired
@@ -54,50 +118,6 @@ class InMemoryStorage implements StorageInterface
         unset($this->expiry[$key]);
 
         return $existed;
-    }
-
-    public function clear(): bool
-    {
-        $this->data = [];
-        $this->expiry = [];
-        return true;
-    }
-
-    public function keys(): array
-    {
-        // Lazily purge expired keys
-        foreach (array_keys($this->expiry) as $key) {
-            if ($this->hasExpired($key)) {
-                $this->delete($key);
-            }
-        }
-
-        return array_keys($this->data);
-    }
-
-    public function getType(string $key): string
-    {
-        if (!$this->exists($key)) {
-            return 'none';
-        }
-
-        $value = $this->data[$key];
-
-        if (is_string($value)) {
-            return 'string';
-        }
-
-        return '';
-    }
-
-    public function exists(string $key): bool
-    {
-        if ($this->hasExpired($key)) {
-            $this->delete($key);
-            return false;
-        }
-
-        return array_key_exists($key, $this->data);
     }
 
     /**

@@ -18,4 +18,8 @@ interface StorageInterface
 
     public function getType(string $key): string;
 
+    // Stream operations
+    public function xadd(string $key, string $id, array $fields): string;
+
+    public function getStream(string $key): ?RedisStream;
 }
