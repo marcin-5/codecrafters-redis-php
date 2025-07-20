@@ -14,6 +14,7 @@ use Redis\Commands\ReplconfCommand;
 use Redis\Commands\SetCommand;
 use Redis\Commands\TypeCommand;
 use Redis\Commands\WaitCommand;
+use Redis\Commands\XAddCommand;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
 use Redis\Storage\StorageFactory;
@@ -40,6 +41,7 @@ class CommandRegistry
         $registry->register('INFO', new InfoCommand());
         $registry->register('REPLCONF', new ReplconfCommand());
         $registry->register('PSYNC', new PsyncCommand());
+        $registry->register('XADD', new XAddCommand($storage));
 
         // Register WAIT command if replication manager is provided
         if ($replicationManager !== null) {
