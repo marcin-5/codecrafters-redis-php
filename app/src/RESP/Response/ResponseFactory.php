@@ -19,6 +19,11 @@ class ResponseFactory
         return new BulkStringResponse($value);
     }
 
+    public static function simpleString(string $value): SimpleStringResponse
+    {
+        return new SimpleStringResponse($value);
+    }
+
     public static function error(string $message): ErrorResponse
     {
         return new ErrorResponse($message);
