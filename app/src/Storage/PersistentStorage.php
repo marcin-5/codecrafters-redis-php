@@ -197,4 +197,9 @@ class PersistentStorage implements StorageInterface
     {
         return $this->storage->xrange($key, $start, $end, $count);
     }
+
+    public function xread(array $streamKeys, array $ids, ?int $count = null): array
+    {
+        return $this->storage->xread($streamKeys, $ids, $count);
+    }
 }

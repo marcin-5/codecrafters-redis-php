@@ -24,4 +24,6 @@ interface StorageInterface
     public function getStream(string $key): ?RedisStream;
 
     public function xrange(string $key, string $start, string $end, ?int $count = null): array;
+
+    public function xread(array $streamKeys, array $ids, ?int $count = null): array;
 }

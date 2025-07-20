@@ -132,6 +132,11 @@ class InMemoryStorage implements StorageInterface
         return $stream->range($start, $end, $count);
     }
 
+    public function xread(array $streamKeys, array $ids, ?int $count = null): array
+    {
+        return RedisStream::read($streamKeys, $ids, $count, fn($key) => $this->getStream($key));
+    }
+
     /**
      * Get all expiry data (for persistence purposes)
      */
