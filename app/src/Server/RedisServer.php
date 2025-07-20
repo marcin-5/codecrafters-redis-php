@@ -52,7 +52,6 @@ class RedisServer
     public function processBufferedMasterData(Socket $masterSocket, string $data): void
     {
         $socketId = spl_object_id($masterSocket);
-
         if (isset($this->replicaProcessors[$socketId])) {
             $this->replicaProcessors[$socketId]->processIncomingData($data);
         }
@@ -113,10 +112,12 @@ class RedisServer
 
         // The $read array is modified by socket_select to contain only sockets with activity
         $activity = socket_select($read, $write, $except, 0, self::SELECT_TIMEOUT_MICROSECONDS);
+
         if ($activity === false) {
             $this->running = false;
             return;
         }
+
         if ($activity === 0) {
             return; // Timeout, continue loop
         }
@@ -125,12 +126,11 @@ class RedisServer
         if (in_array($this->serverSocket, $read, true)) {
             $this->acceptNewConnection();
         }
-        // Handle client activity
+
         foreach ($read as $clientSocket) {
-            if ($clientSocket === $this->serverSocket) {
-                continue; // Skip server socket, it's for new connections
+            if ($clientSocket !== $this->serverSocket) {
+                $this->handleClientActivity($clientSocket);
             }
-            $this->handleClientActivity($clientSocket);
         }
     }
 
@@ -153,50 +153,43 @@ class RedisServer
     private function handleClientActivity(Socket $clientSocket): void
     {
         $socketId = spl_object_id($clientSocket);
-
         if (isset($this->replicaProcessors[$socketId])) {
-            // Data from master
-            $data = socket_read($clientSocket, self::BUFFER_SIZE);
-            if ($data === false || $data === '') {
-                echo "Connection to master lost." . PHP_EOL;
-                $this->disconnectClient($clientSocket);
-                // You might want to add logic here to attempt reconnection
-                return;
-            }
-            $this->replicaProcessors[$socketId]->processIncomingData($data);
+            $this->processMasterData($clientSocket, $socketId);
         } else {
-            // Data from a regular client
-            $this->handleRegularClient($clientSocket);
+            $this->processClientCommand($clientSocket);
         }
     }
 
-    /**
-     * Disconnect a client
-     */
-    private function disconnectClient(Socket $clientSocket): void
+    private function processMasterData(Socket $clientSocket, int $socketId): void
+    {
+        $data = socket_read($clientSocket, self::BUFFER_SIZE);
+        if ($data === false || $data === '') {
+            $this->disconnectClient($clientSocket, "Connection to master lost.");
+            return;
+        }
+        $this->replicaProcessors[$socketId]->processIncomingData($data);
+    }
+
+    private function disconnectClient(Socket $clientSocket, string $reason): void
     {
         $socketId = spl_object_id($clientSocket);
-        echo "Client disconnected: {$socketId}" . PHP_EOL;
-
-        // Clean up resources
-        unset($this->clients[$socketId]);
-        unset($this->replicaProcessors[$socketId]);
+        echo "Client disconnected: {$socketId}. Reason: {$reason}" . PHP_EOL;
+        unset($this->clients[$socketId], $this->replicaProcessors[$socketId]);
         $this->replicationManager->removeReplica($clientSocket);
         socket_close($clientSocket);
     }
 
-    private function handleRegularClient(Socket $clientSocket): void
+    private function processClientCommand(Socket $clientSocket): void
     {
         $data = socket_read($clientSocket, self::BUFFER_SIZE);
         if ($data === false || $data === '') {
-            $this->disconnectClient($clientSocket);
+            $this->disconnectClient($clientSocket, "Connection closed by client.");
             return;
         }
 
         try {
             $offset = 0;
             $parsedCommand = $this->parser->parseNext($data, $offset);
-
             if (!is_array($parsedCommand) || empty($parsedCommand)) {
                 // Not a valid command, might be partial.
                 // For this implementation, we'll assume one command per read and ignore invalid.
@@ -205,11 +198,8 @@ class RedisServer
 
             $commandName = strtolower(array_shift($parsedCommand));
             $args = $parsedCommand;
-
             $response = $this->registry->execute($commandName, $args);
             $this->sendResponse($clientSocket, $response);
-
-            // Handle replication state changes and command propagation
             $this->handleReplicationForCommand($clientSocket, $commandName, $args);
         } catch (Exception $e) {
             echo "Error processing client command: " . $e->getMessage() . PHP_EOL;
@@ -254,15 +244,8 @@ class RedisServer
      */
     private function isWriteCommand(string $commandName): bool
     {
-        $writeCommands = [
-            'SET',
-            'DEL',
-            'EXPIRE',
-            'FLUSHALL',
-            'FLUSHDB',
-        ];
-
-        return in_array($commandName, $writeCommands, true);
+        $writeCommands = ['SET', 'DEL', 'INCR', 'DECR', 'LPUSH', 'RPUSH', 'HSET'];
+        return in_array($command, $writeCommands, true);
     }
 
     /**
@@ -270,37 +253,7 @@ class RedisServer
      */
     private function sendErrorResponse(Socket $clientSocket, string $message): void
     {
-        $errorResponse = ResponseFactory::error('ERR ' . $message);
+        $errorResponse = ResponseFactory::error($message);
         $this->sendResponse($clientSocket, $errorResponse);
-    }
-
-    /**
-     * Stop the server
-     */
-    public function stop(): void
-    {
-        $this->running = false;
-        $this->cleanup();
-        echo "Server stopped" . PHP_EOL;
-    }
-
-    /**
-     * Cleanup resources
-     */
-    private function cleanup(): void
-    {
-        foreach ($this->clients as $client) {
-            socket_close($client);
-        }
-        $this->clients = [];
-        if ($this->serverSocket) {
-            socket_close($this->serverSocket);
-            $this->serverSocket = null;
-        }
-    }
-
-    public function getReplicationManager(): ReplicationManager
-    {
-        return $this->replicationManager;
     }
 }
