@@ -12,6 +12,7 @@ use Redis\Commands\PsyncCommand;
 use Redis\Commands\RedisCommand;
 use Redis\Commands\ReplconfCommand;
 use Redis\Commands\SetCommand;
+use Redis\Commands\WaitCommand;
 use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
 use Redis\Storage\StorageFactory;
@@ -20,7 +21,7 @@ class CommandRegistry
 {
     private array $commands = [];
 
-    public static function createWithDefaults(array $config = []): self
+    public static function createWithDefaults(array $config = [], $replicationManager = null): self
     {
         $registry = new self();
 
@@ -37,6 +38,11 @@ class CommandRegistry
         $registry->register('INFO', new InfoCommand());
         $registry->register('REPLCONF', new ReplconfCommand());
         $registry->register('PSYNC', new PsyncCommand());
+
+        // Register WAIT command if replication manager is provided
+        if ($replicationManager !== null) {
+            $registry->register('WAIT', new WaitCommand($replicationManager));
+        }
 
         return $registry;
     }
