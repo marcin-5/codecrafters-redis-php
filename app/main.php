@@ -35,8 +35,8 @@ if (isset($config['replicaof'])) {
 
 // Initialize components
 $parser = new RESPParser();
-$registry = CommandRegistry::createWithDefaults($config);
 $replicationManager = new ReplicationManager();
+$registry = CommandRegistry::createWithDefaults($config, $replicationManager);
 $server = new RedisServer('localhost', $config['port'], $parser, $registry, $replicationManager);
 
 // Handle replication handshake if this is a replica

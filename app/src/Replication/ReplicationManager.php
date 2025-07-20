@@ -11,12 +11,23 @@ class ReplicationManager
     private array $replicas = [];
 
     /**
-     * Register a socket as a replica (after PSYNC handshake)
+     * Add a replica to the list of connected replicas
      */
-    public function addReplica(Socket $socket): void
+    public function addReplica(Socket $replica): void
     {
-        $this->replicas[spl_object_id($socket)] = $socket;
-        echo "Replica registered: " . spl_object_id($socket) . PHP_EOL;
+        $replicaId = spl_object_id($replica);
+        $this->replicas[$replicaId] = $replica;
+        echo "Added replica: {$replicaId}" . PHP_EOL;
+    }
+
+    /**
+     * Remove a replica from the list
+     */
+    public function removeReplica(Socket $replica): void
+    {
+        $replicaId = spl_object_id($replica);
+        unset($this->replicas[$replicaId]);
+        echo "Removed replica: {$replicaId}" . PHP_EOL;
     }
 
     /**
@@ -24,7 +35,16 @@ class ReplicationManager
      */
     public function isReplica(Socket $socket): bool
     {
-        return isset($this->replicas[spl_object_id($socket)]);
+        $socketId = spl_object_id($socket);
+        return isset($this->replicas[$socketId]);
+    }
+
+    /**
+     * Get the number of connected replicas
+     */
+    public function getReplicaCount(): int
+    {
+        return count($this->replicas);
     }
 
     /**
@@ -33,50 +53,22 @@ class ReplicationManager
     public function propagateCommand(string $commandName, array $args): void
     {
         if (empty($this->replicas)) {
-            return; // No replicas to propagate to
+            return;
         }
 
-        $commandArray = array_merge([$commandName], $args);
-        $response = new ArrayResponse($commandArray);
-        $serialized = $response->serialize();
+        $command = new ArrayResponse(array_merge([$commandName], $args));
+        $serializedCommand = $command->serialize();
 
-        $disconnectedReplicas = [];
-
-        foreach ($this->replicas as $id => $replica) {
-            $result = @socket_write($replica, $serialized);
+        foreach ($this->replicas as $replicaId => $replica) {
+            $result = socket_write($replica, $serializedCommand);
             if ($result === false) {
-                // Mark for removal if write failed
-                $disconnectedReplicas[] = $replica;
+                echo "Failed to propagate command to replica {$replicaId}: " .
+                    socket_strerror(socket_last_error($replica)) . PHP_EOL;
+                // Remove failed replica
+                unset($this->replicas[$replicaId]);
+            } else {
+                echo "Propagated '{$commandName}' to replica {$replicaId}" . PHP_EOL;
             }
         }
-
-        // Remove disconnected replicas
-        foreach ($disconnectedReplicas as $replica) {
-            $this->removeReplica($replica);
-        }
-
-        if (!empty($this->replicas)) {
-            echo "Propagated command '{$commandName}' to " . count($this->replicas) . " replica(s)" . PHP_EOL;
-        }
-    }
-
-    /**
-     * Remove a replica (when connection is lost)
-     */
-    public function removeReplica(Socket $socket): void
-    {
-        $id = spl_object_id($socket);
-        if (isset($this->replicas[$id])) {
-            unset($this->replicas[$id]);
-            echo "Replica unregistered: " . $id . PHP_EOL;
-        }
-    }
-
-    /**
-     * Get count of connected replicas
-     */
-    public function getReplicaCount(): int
-    {
-        return count($this->replicas);
     }
 }
