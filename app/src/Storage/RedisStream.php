@@ -2,6 +2,8 @@
 
 namespace Redis\Storage;
 
+use InvalidArgumentException;
+
 class RedisStream
 {
     private array $entries = [];
@@ -9,117 +11,69 @@ class RedisStream
 
     public function addEntry(string $id, array $fields): string
     {
-        // Validate and potentially auto-generate ID
-        $finalId = $this->validateAndProcessId($id);
-
+        $finalId = $this->resolveEntryId($id);
         $this->entries[$finalId->toString()] = $fields;
         $this->lastId = $finalId;
-
         return $finalId->toString();
     }
 
-    private function validateAndProcessId(string $id): StreamEntryId
+    private function resolveEntryId(string $id): StreamEntryId
     {
-        try {
-            $entryId = StreamEntryId::parse($id);
+        $entryId = StreamEntryId::parse($id);
 
-            // Handle full auto-generation with '*'
-            if ($id === '*') {
-                return $this->generateNextId($entryId);
-            }
-
-            // Handle partial auto-generation with '<milliseconds>-*'
-            if ($entryId->isAutoSequence()) {
-                return $this->generateSequenceForTimestamp($entryId);
-            }
-
-            // Handle explicit ID validation
-            return $this->validateExplicitId($entryId);
-        } catch (\InvalidArgumentException $e) {
-            throw $e;
+        if ($entryId->isAutoSequence()) {
+            // For '*' the timestamp is also auto-generated.
+            // For '<ms>-*' the timestamp is explicit.
+            $isTimestampAuto = ($id === '*');
+            return $this->generateAutoSequenceId($entryId, $isTimestampAuto);
         }
+
+        return $this->validateExplicitId($entryId);
     }
 
-    private function generateNextId(StreamEntryId $baseId): StreamEntryId
+    private function generateAutoSequenceId(StreamEntryId $requestedId, bool $isTimestampAuto): StreamEntryId
     {
         if ($this->lastId === null) {
-            // First entry - use the generated timestamp with sequence 0
-            return $baseId;
+            // First entry. `0-0` is invalid, so for a timestamp of 0, the sequence must be at least 1.
+            $sequence = ($requestedId->getMilliseconds() === 0) ? 1 : 0;
+            return $requestedId->withSequence($sequence);
         }
 
-        // If the timestamp is the same as the last entry, increment sequence
-        if ($baseId->getMilliseconds() === $this->lastId->getMilliseconds()) {
-            return new StreamEntryId(
-                $baseId->getMilliseconds(),
-                $this->lastId->getSequence() + 1,
-            );
+        $requestedMilliseconds = $requestedId->getMilliseconds();
+        $lastMilliseconds = $this->lastId->getMilliseconds();
+
+        // If requested timestamp is greater than the last one, the new sequence starts at 0.
+        if ($requestedMilliseconds > $lastMilliseconds) {
+            return $requestedId->withSequence(0);
         }
 
-        // If timestamp is greater, use sequence 0
-        if ($baseId->getMilliseconds() > $this->lastId->getMilliseconds()) {
-            return new StreamEntryId($baseId->getMilliseconds(), 0);
+        // If requested timestamp is the same, or if it's smaller but allowed to be updated (the '*' case),
+        // we increment the sequence based on the last ID.
+        if ($requestedMilliseconds === $lastMilliseconds || $isTimestampAuto) {
+            return $this->lastId->incrementSequence();
         }
 
-        // If timestamp is smaller, use last timestamp with incremented sequence
-        return new StreamEntryId(
-            $this->lastId->getMilliseconds(),
-            $this->lastId->getSequence() + 1,
-        );
-    }
-
-    private function generateSequenceForTimestamp(StreamEntryId $entryId): StreamEntryId
-    {
-        $milliseconds = $entryId->getMilliseconds();
-
-        if ($this->lastId === null) {
-            // First entry - for 0-*, we need to use at least 0-1 (since 0-0 is not allowed)
-            if ($milliseconds === 0) {
-                return $entryId->withSequence(1);
-            }
-            // For any other timestamp, use sequence 0
-            return $entryId->withSequence(0);
-        }
-
-        // If the timestamp is the same as the last entry, increment sequence
-        if ($milliseconds === $this->lastId->getMilliseconds()) {
-            return $entryId->withSequence($this->lastId->getSequence() + 1);
-        }
-
-        // If timestamp is greater than last entry, use sequence 0
-        if ($milliseconds > $this->lastId->getMilliseconds()) {
-            return $entryId->withSequence(0);
-        }
-
-        // If timestamp is smaller than last entry, this is an error
-        throw new \InvalidArgumentException(
+        // Otherwise, the requested timestamp is smaller than the last one for a '<ms>-*' ID, which is an error.
+        throw new InvalidArgumentException(
             "ERR The ID specified in XADD is equal or smaller than the target stream top item",
         );
     }
 
     private function validateExplicitId(StreamEntryId $entryId): StreamEntryId
     {
-        // Special case: check for 0-0 specifically
-        $zeroId = StreamEntryId::zero();
-        if ($entryId->equals($zeroId)) {
-            throw new \InvalidArgumentException(
+        // Explicitly check for "0-0" as it has a specific error message.
+        if ($entryId->equals(StreamEntryId::zero())) {
+            throw new InvalidArgumentException(
                 "ERR The ID specified in XADD must be greater than 0-0",
             );
         }
 
-        // Validate that the ID is greater than the last ID (if stream has entries)
-        if ($this->lastId !== null) {
-            if (!$entryId->isGreaterThan($this->lastId)) {
-                throw new \InvalidArgumentException(
-                    "ERR The ID specified in XADD is equal or smaller than the target stream top item",
-                );
-            }
-        } else {
-            // First entry - must be greater than 0-0 (already checked above)
-            if (!$entryId->isGreaterThan($zeroId)) {
-                throw new \InvalidArgumentException(
-                    "ERR The ID specified in XADD must be greater than 0-0",
-                );
-            }
+        // The new ID must be greater than the last ID, or "0-0" for an empty stream.
+        $minValidId = $this->lastId ?? StreamEntryId::zero();
+        if (!$entryId->isGreaterThan($minValidId)) {
+            throw new InvalidArgumentException(
+                "ERR The ID specified in XADD is equal or smaller than the target stream top item",
+            );
         }
 
         return $entryId;
