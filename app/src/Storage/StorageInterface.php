@@ -16,4 +16,6 @@ interface StorageInterface
 
     public function keys(): array;
 
+    public function getType(string $key): string;
+
 }

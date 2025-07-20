@@ -56,16 +56,6 @@ class InMemoryStorage implements StorageInterface
         return $existed;
     }
 
-    public function exists(string $key): bool
-    {
-        if ($this->hasExpired($key)) {
-            $this->delete($key);
-            return false;
-        }
-
-        return array_key_exists($key, $this->data);
-    }
-
     public function clear(): bool
     {
         $this->data = [];
@@ -83,6 +73,31 @@ class InMemoryStorage implements StorageInterface
         }
 
         return array_keys($this->data);
+    }
+
+    public function getType(string $key): string
+    {
+        if (!$this->exists($key)) {
+            return 'none';
+        }
+
+        $value = $this->data[$key];
+
+        if (is_string($value)) {
+            return 'string';
+        }
+
+        return '';
+    }
+
+    public function exists(string $key): bool
+    {
+        if ($this->hasExpired($key)) {
+            $this->delete($key);
+            return false;
+        }
+
+        return array_key_exists($key, $this->data);
     }
 
     /**

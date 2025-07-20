@@ -178,4 +178,9 @@ class PersistentStorage implements StorageInterface
         return $this->storage->keys();
     }
 
+    public function getType(string $key): string
+    {
+        return $this->storage->getType($key);
+    }
+
 }
