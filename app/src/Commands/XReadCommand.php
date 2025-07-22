@@ -19,6 +19,7 @@ class XReadCommand implements RedisCommand
     private const string COUNT_KEYWORD = 'COUNT';
     private const string BLOCK_KEYWORD = 'BLOCK';
     private const string STREAMS_KEYWORD = 'STREAMS';
+    private const string SPECIAL_ID_LATEST = '$';
 
     private ?Socket $clientSocket = null;
     private ?ClientWaitingManager $waitingManager = null;
@@ -53,25 +54,39 @@ class XReadCommand implements RedisCommand
                 return new ArrayResponse($results);
             }
 
-            // Blocking read - try immediate read first
-            $results = RedisStream::read(
-                $streamKeys,
-                $ids,
-                $count,
-                fn($key) => $this->storage->getStream($key),
-            );
+            // For blocking read, handle '$' ID specially
+            $resolvedIds = $this->resolveStreamIdsForBlocking($streamKeys, $ids);
 
-            // If we have results, return them immediately
-            if (!empty($results)) {
-                return new ArrayResponse($results);
+            // Blocking read - for '$' ID, we should not try immediate read
+            // as '$' means "wait for new entries after the current latest"
+            $shouldTryImmediateRead = true;
+            foreach ($ids as $id) {
+                if ($id === self::SPECIAL_ID_LATEST) {
+                    $shouldTryImmediateRead = false;
+                    break;
+                }
             }
 
-            // No immediate results - register client as waiting
+            if ($shouldTryImmediateRead) {
+                $results = RedisStream::read(
+                    $streamKeys,
+                    $resolvedIds,
+                    $count,
+                    fn($key) => $this->storage->getStream($key),
+                );
+
+                // If we have results, return them immediately
+                if (!empty($results)) {
+                    return new ArrayResponse($results);
+                }
+            }
+
+            // No immediate results or '$' ID used - register client as waiting
             if ($this->clientSocket && $this->waitingManager) {
                 $this->waitingManager->addWaitingClient(
                     $this->clientSocket,
                     $streamKeys,
-                    $ids,
+                    $resolvedIds,
                     $count,
                     $blockTimeout,
                 );
@@ -192,5 +207,28 @@ class XReadCommand implements RedisCommand
         $streamKeys = array_slice($args, 0, $streamCount);
         $ids = array_slice($args, $streamCount);
         return [$streamKeys, $ids];
+    }
+
+    /**
+     * Resolves stream IDs for blocking read, converting '$' to the last entry ID.
+     */
+    private function resolveStreamIdsForBlocking(array $streamKeys, array $ids): array
+    {
+        $resolvedIds = $ids;
+        foreach ($streamKeys as $i => $streamKey) {
+            if ($ids[$i] === self::SPECIAL_ID_LATEST) {
+                $stream = $this->storage->getStream($streamKey);
+                $lastId = $stream ? $stream->getLastId() : null;
+
+                if ($lastId) {
+                    $resolvedIds[$i] = $lastId->toString();
+                } else {
+                    // If the stream doesn't exist or is empty, '$' should wait for any new entry
+                    // Use '0-0' as the base ID so any new entry will be greater
+                    $resolvedIds[$i] = '0-0';
+                }
+            }
+        }
+        return $resolvedIds;
     }
 }
