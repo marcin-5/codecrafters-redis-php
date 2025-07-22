@@ -5,6 +5,7 @@ namespace Redis\Registry;
 use Redis\Commands\ConfigGetCommand;
 use Redis\Commands\EchoCommand;
 use Redis\Commands\GetCommand;
+use Redis\Commands\IncrCommand;
 use Redis\Commands\InfoCommand;
 use Redis\Commands\KeysCommand;
 use Redis\Commands\PingCommand;
@@ -39,8 +40,9 @@ class CommandRegistry
         // Register commands, injecting storage where needed
         $registry->register('PING', new PingCommand());
         $registry->register('ECHO', new EchoCommand());
-        $registry->register('SET', new SetCommand($storage));
         $registry->register('GET', new GetCommand($storage));
+        $registry->register('SET', new SetCommand($storage));
+        $registry->register('INCR', new IncrCommand($storage));
         $registry->register('TYPE', new TypeCommand($storage));
         $registry->register('CONFIG', new ConfigGetCommand($config));
         $registry->register('KEYS', new KeysCommand($storage));
