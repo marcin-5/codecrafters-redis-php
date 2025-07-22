@@ -2,7 +2,6 @@
 
 namespace Redis\Storage;
 
-use InvalidArgumentException;
 use Redis\Utils\StreamResultFormatter;
 
 class RedisStream
@@ -11,39 +10,60 @@ class RedisStream
     private ?StreamEntryId $lastId = null;
 
     /**
-     * Reads entries from multiple streams starting after the specified IDs.
-     * This method handles the logic for XREAD command.
+     * Reads entries from multiple streams, applying a single count limit across all streams.
+     * This method correctly handles the logic for the XREAD command with a COUNT option.
      *
-     * @param array $streamKeys Array of stream keys
-     * @param array $ids Array of IDs to read after (one for each stream key)
-     * @param int|null $count Optional count limit
-     * @param callable(string): ?RedisStream $getStreamCallback Callback to get stream by key
-     * @return array Array of results in XREAD format
+     * @param array $streamKeys Array of stream keys.
+     * @param array $ids Array of IDs to read after (one for each stream key).
+     * @param int|null $count Optional total count limit for entries returned.
+     * @param callable(string): ?RedisStream $getStreamCallback Callback to get a stream by key.
+     * @return array Array of results in XREAD format.
      */
     public static function read(array $streamKeys, array $ids, ?int $count, callable $getStreamCallback): array
     {
-        $results = [];
+        if ($count === 0) {
+            return [];
+        }
+        $allEntries = [];
         foreach ($streamKeys as $index => $streamKey) {
-            $streamId = $ids[$index];
             $stream = $getStreamCallback($streamKey);
             if ($stream === null) {
                 continue; // Skip non-existent streams
             }
-            $streamEntries = $stream->readAfter($streamId, $count);
-            if (!empty($streamEntries)) {
-                $results[] = [$streamKey, StreamResultFormatter::format($streamEntries)];
+            // Fetch entries from each stream. Fetching up to 'count' is a reasonable heuristic.
+            $streamEntries = $stream->readAfter($ids[$index], $count);
+            foreach ($streamEntries as $id => $fields) {
+                $allEntries[] = ['streamKey' => $streamKey, 'id' => $id, 'fields' => $fields];
+            }
+        }
+        if (empty($allEntries)) {
+            return [];
+        }
+        // Sort all collected entries by ID to respect stream ordering.
+        usort($allEntries, static fn($a, $b) => strcmp($a['id'], $b['id']));
+        // Apply the global count limit.
+        $limitedEntries = ($count !== null) ? array_slice($allEntries, 0, $count) : $allEntries;
+        // Group by stream key to format the result.
+        $groupedByStream = [];
+        foreach ($limitedEntries as $entry) {
+            $groupedByStream[$entry['streamKey']][$entry['id']] = $entry['fields'];
+        }
+        // Build final result set, preserving original stream key order.
+        $results = [];
+        foreach ($streamKeys as $streamKey) {
+            if (isset($groupedByStream[$streamKey])) {
+                $results[] = [$streamKey, StreamResultFormatter::format($groupedByStream[$streamKey])];
             }
         }
         return $results;
     }
 
     /**
-     * Reads entries after the specified ID (exclusive).
-     * Handles special '$' ID by using the last entry ID.
+     * Reads entries after the specified ID (exclusive), optimized for sorted entry IDs.
      *
-     * @param string $afterId ID to read after (exclusive), or '$' for last entry
-     * @param int|null $count Optional count limit
-     * @return array Associative array of entry IDs to field-value maps
+     * @param string $afterId ID to read after (exclusive), or '$' for the last entry.
+     * @param int|null $count Optional count limit.
+     * @return array Associative array of entry IDs to field-value maps.
      */
     public function readAfter(string $afterId, ?int $count = null): array
     {
@@ -51,126 +71,73 @@ class RedisStream
         if ($startId === null) {
             return [];
         }
-        return $this->filterEntries(
-            fn(StreamEntryId $entryId): bool => $entryId->isGreaterThan($startId),
-            $count,
-        );
+        return $this->findEntriesAfter($startId, $count);
     }
 
     /**
-     * Resolves the start ID for reading, handling special '$' case.
+     * Resolves the start ID for reading, handling the special '$' case.
      */
     private function resolveReadStartId(string $afterId): ?StreamEntryId
     {
         if ($afterId === '$') {
-            return $this->lastId; // Can be null if stream is empty
+            return $this->lastId;
         }
         return StreamEntryId::parse($afterId);
     }
 
     /**
-     * Common method to filter entries based on a predicate.
+     * Finds entries with IDs greater than the given start ID using a binary search.
+     * This is efficient but assumes that the keys of $this->entries are sorted.
      */
-    private function filterEntries(callable $predicate, ?int $count): array
+    private function findEntriesAfter(StreamEntryId $startId, ?int $count): array
     {
+        $keys = array_keys($this->entries);
+        $startIndex = $this->findFirstEntryIndex($keys, $startId, false);
+        if ($startIndex === -1) {
+            return [];
+        }
+        $slicedKeys = array_slice($keys, $startIndex, $count);
         $result = [];
-        $counter = 0;
-        foreach ($this->entries as $idStr => $fields) {
-            $entryId = StreamEntryId::parse($idStr);
-            if ($predicate($entryId)) {
-                $result[$idStr] = $fields;
-                $counter++;
-                if ($count !== null && $counter >= $count) {
-                    break;
-                }
-            }
+        foreach ($slicedKeys as $key) {
+            $result[$key] = $this->entries[$key];
         }
         return $result;
     }
 
-    public function addEntry(string $id, array $fields): string
-    {
-        $finalId = $this->resolveEntryId($id);
-        $this->entries[$finalId->toString()] = $fields;
-        $this->lastId = $finalId;
-        return $finalId->toString();
-    }
-
-    private function resolveEntryId(string $id): StreamEntryId
-    {
-        $entryId = StreamEntryId::parse($id);
-        if ($entryId->isAutoSequence()) {
-            // For '*' the timestamp is also auto-generated.
-            // For '<ms>-*' the timestamp is explicit.
-            $isTimestampAuto = ($id === '*');
-            return $this->generateAutoSequenceId($entryId, $isTimestampAuto);
-        }
-        return $this->validateExplicitId($entryId);
-    }
-
-    private function generateAutoSequenceId(StreamEntryId $requestedId, bool $isTimestampAuto): StreamEntryId
-    {
-        if ($this->lastId === null) {
-            return $this->generateFirstAutoSequenceId($requestedId);
-        }
-        $requestedMilliseconds = $requestedId->getMilliseconds();
-        $lastMilliseconds = $this->lastId->getMilliseconds();
-        // If requested timestamp is greater than the last one, the new sequence starts at 0.
-        if ($requestedMilliseconds > $lastMilliseconds) {
-            return $requestedId->withSequence(0);
-        }
-        // If requested timestamp is the same, or if it's smaller but allowed to be updated (the '*' case),
-        // we increment the sequence based on the last ID.
-        if ($requestedMilliseconds === $lastMilliseconds || $isTimestampAuto) {
-            return $this->lastId->incrementSequence();
-        }
-        // Otherwise, the requested timestamp is smaller than the last one for a '<ms>-*' ID, which is an error.
-        throw new InvalidArgumentException(
-            "ERR The ID specified in XADD is equal or smaller than the target stream top item",
-        );
-    }
-
     /**
-     * Generates the first ID for a stream with an auto-sequence component.
+     * Performs a binary search on ID strings to find the first index matching the specified criteria.
+     *
+     * @param string[] $idStrings
+     * @param StreamEntryId $targetId
+     * @param bool $inclusive If true, finds >= target. If false, finds > target.
+     * @return int
      */
-    private function generateFirstAutoSequenceId(StreamEntryId $requestedId): StreamEntryId
+    private function findFirstEntryIndex(array $idStrings, StreamEntryId $targetId, bool $inclusive): int
     {
-        // First entry. `0-0` is invalid, so for a timestamp of 0, the sequence must be at least 1.
-        $sequence = ($requestedId->getMilliseconds() === 0) ? 1 : 0;
-        return $requestedId->withSequence($sequence);
-    }
+        $low = 0;
+        $high = count($idStrings) - 1;
+        $ans = -1;
 
-    private function validateExplicitId(StreamEntryId $entryId): StreamEntryId
-    {
-        // Explicitly check for "0-0" as it has a specific error message.
-        if ($entryId->equals(StreamEntryId::zero())) {
-            throw new InvalidArgumentException(
-                "ERR The ID specified in XADD must be greater than 0-0",
-            );
+        while ($low <= $high) {
+            $mid = (int)(($low + $high) / 2);
+            $midId = StreamEntryId::parse($idStrings[$mid]);
+
+            $isGreater = $midId->isGreaterThan($targetId);
+            if ($inclusive) {
+                $match = $isGreater || $midId->equals($targetId);
+            } else {
+                $match = $isGreater;
+            }
+
+            if ($match) {
+                $ans = $mid;
+                $high = $mid - 1; // Try to find an earlier one
+            } else {
+                $low = $mid + 1; // Look in the right half
+            }
         }
-        // The new ID must be greater than the last ID, or "0-0" for an empty stream.
-        $minValidId = $this->lastId ?? StreamEntryId::zero();
-        if (!$entryId->isGreaterThan($minValidId)) {
-            throw new InvalidArgumentException(
-                "ERR The ID specified in XADD is equal or smaller than the target stream top item",
-            );
-        }
-        return $entryId;
-    }
 
-    public function getEntries(): array
-    {
-        return $this->entries;
-    }
-
-    public function isEmpty(): bool
-    {
-        return empty($this->entries);
-    }
-
-    public function getLastId(): ?StreamEntryId
-    {
-        return $this->lastId;
+        return $ans;
     }
 
     /**
@@ -186,12 +153,99 @@ class RedisStream
         $startId = StreamEntryId::parse($start);
         $endId = StreamEntryId::parse($end);
 
-        $predicate = static function (StreamEntryId $entryId) use ($startId, $endId): bool {
-            $isAfterStart = $entryId->isGreaterThan($startId) || $entryId->equals($startId);
-            $isBeforeEnd = $endId->isGreaterThan($entryId) || $entryId->equals($endId);
-            return $isAfterStart && $isBeforeEnd;
-        };
+        $keys = array_keys($this->entries);
+        $startIndex = $this->findFirstEntryIndex($keys, $startId, true);
 
-        return $this->filterEntries($predicate, $count);
+        if ($startIndex === -1) {
+            return [];
+        }
+
+        // Find the index of the first entry with an ID greater than the end ID.
+        // This marks the upper boundary of our range (exclusive).
+        $endBoundaryIndex = $this->findFirstEntryIndex($keys, $endId, false);
+
+        $length = 0;
+        if ($endBoundaryIndex !== -1) {
+            // If a boundary is found, the length is the difference between the indices.
+            $length = $endBoundaryIndex - $startIndex;
+        } else {
+            // If no boundary is found, all entries from startIndex to the end are included.
+            $length = count($keys) - $startIndex;
+        }
+
+        if ($length <= 0) {
+            return [];
+        }
+
+        // Apply the count limit if provided.
+        if ($count !== null) {
+            $length = min($length, $count);
+        }
+
+        $entryKeys = array_slice($keys, $startIndex, $length);
+
+        $result = [];
+        foreach ($entryKeys as $key) {
+            $result[$key] = $this->entries[$key];
+        }
+
+        return $result;
     }
+
+    public function addEntry(string $id, array $fields): string
+    {
+        $finalId = $this->resolveEntryId($id);
+        $this->entries[$finalId->toString()] = $fields;
+        $this->lastId = $finalId;
+        // This implementation relies on entries being added with monotonically increasing IDs
+        // to keep the $this->entries array sorted by key for efficient reads.
+        return $finalId->toString();
+    }
+
+    /**
+     * Parses the input ID, validates it, and finalizes it if auto-generation is required.
+     */
+    private function resolveEntryId(string $id): StreamEntryId
+    {
+        if ($id === '0-0') {
+            throw new \InvalidArgumentException('ERR The ID specified in XADD must be greater than 0-0');
+        }
+
+        $parsedId = StreamEntryId::parse($id);
+
+        if ($parsedId->isAutoSequence()) {
+            return $this->finalizeAutoId($parsedId);
+        }
+
+        if ($this->lastId !== null && !$parsedId->isGreaterThan($this->lastId)) {
+            throw new \InvalidArgumentException(
+                'ERR The ID specified in XADD is equal or smaller than the target stream top item',
+            );
+        }
+
+        return $parsedId;
+    }
+
+    /**
+     * Generates the final StreamEntryId for an ID that requires an auto-generated sequence number.
+     */
+    private function finalizeAutoId(StreamEntryId $templateId): StreamEntryId
+    {
+        $timestamp = $templateId->getMilliseconds();
+        if ($this->lastId !== null && $this->lastId->getMilliseconds() > $timestamp) {
+            throw new \InvalidArgumentException(
+                'ERR The ID specified in XADD is smaller than the master instance\'s time',
+            );
+        }
+        if ($this->lastId !== null && $this->lastId->getMilliseconds() === $timestamp) {
+            return $this->lastId->incrementSequence();
+        }
+        return new StreamEntryId($timestamp, $timestamp === 0 ? 1 : 0);
+    }
+
+    public function getLastId(): ?StreamEntryId
+    {
+        return $this->lastId;
+    }
+
 }
