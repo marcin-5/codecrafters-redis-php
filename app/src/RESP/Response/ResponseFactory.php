@@ -69,4 +69,9 @@ class ResponseFactory
     {
         return new ErrorResponse('ERR invalid expire time');
     }
+
+    public static function queued(): RESPResponse
+    {
+        return new SimpleStringResponse('QUEUED');
+    }
 }
