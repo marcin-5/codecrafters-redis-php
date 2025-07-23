@@ -208,33 +208,36 @@ class RedisServer
             $parsedCommand = $this->parser->parseNext($data, $offset);
 
             if (!is_array($parsedCommand) || empty($parsedCommand)) {
-                // Not a valid command, might be partial.
-                // For this implementation, we'll assume one command per read and ignore invalid.
+                return;
+            }
+
+            // Validate we have at least one element before shifting
+            if (count($parsedCommand) === 0) {
                 return;
             }
 
             $commandName = strtolower(array_shift($parsedCommand));
             $args = $parsedCommand;
 
-            // Set up waiting manager for XREAD and XADD commands
+            // Set up waiting manager for XREAD commands
             $command = $this->registry->getCommand($commandName);
             if ($command instanceof XReadCommand) {
                 $command->setClientSocket($clientSocket);
                 $command->setWaitingManager($this->waitingManager);
             }
 
-            $response = $this->registry->execute($commandName, $args);
+            // Pass $clientSocket as the first parameter
+            $response = $this->registry->execute($clientSocket, $commandName, $args);
 
             // Handle blocking wait response
             if ($response instanceof BlockingWaitResponse) {
-                // Client is now waiting, don't send response yet
                 return;
             }
 
             $this->sendResponse($clientSocket, $response);
 
-            // Handle notifications for XADD command
-            if ($command instanceof XAddCommand) {
+            // Handle XADD notifications - validate args before accessing
+            if ($command instanceof XAddCommand && !empty($args)) {
                 $notifiedClients = $this->waitingManager->checkAndNotifyWaitingClients(
                     $args[0], // stream key
                     $this->registry->getStorage(),
@@ -245,7 +248,6 @@ class RedisServer
                 }
             }
 
-            // Handle replication state changes and command propagation
             $this->handleReplicationForCommand($clientSocket, $commandName, $args);
         } catch (Exception $e) {
             echo "Error processing client command: " . $e->getMessage() . PHP_EOL;

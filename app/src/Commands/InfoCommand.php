@@ -18,7 +18,7 @@ class InfoCommand implements RedisCommand
         $this->formatter = new InfoFormatter();
     }
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         // If specific section is requested
         if (count($args) > 0) {

@@ -144,7 +144,7 @@ class ReplicaCommandProcessor
 
         // Execute other commands but don't send response (replica mode)
         try {
-            $this->registry->execute($commandName, $args);
+            $this->registry->execute($this->masterSocket, $commandName, $args);
             // Note: We don't send the response anywhere - replicas are silent for normal commands
         } catch (Exception $e) {
             echo "Error executing replicated command '{$commandName}': " . $e->getMessage() . PHP_EOL;

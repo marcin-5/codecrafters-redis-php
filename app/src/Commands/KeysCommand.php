@@ -19,7 +19,7 @@ class KeysCommand implements RedisCommand
     {
     }
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         // --- 1. Validate arguments & obtain the pattern --------------------
         $pattern = $this->validateAndGetPattern($args);

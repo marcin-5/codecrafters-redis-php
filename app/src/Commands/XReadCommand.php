@@ -38,7 +38,7 @@ class XReadCommand implements RedisCommand
         $this->waitingManager = $waitingManager;
     }
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         try {
             [$streamKeys, $ids, $count, $blockTimeout] = $this->parseArguments($args);

@@ -15,7 +15,7 @@ class XAddCommand implements RedisCommand
     {
     }
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         $argCount = count($args);
 

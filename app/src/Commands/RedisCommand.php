@@ -6,5 +6,5 @@ use Redis\RESP\Response\RESPResponse;
 
 interface RedisCommand
 {
-    public function execute(array $args): RESPResponse;
+    public function execute(object $client, array $args): RESPResponse;
 }

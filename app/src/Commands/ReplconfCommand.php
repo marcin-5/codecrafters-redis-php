@@ -7,7 +7,7 @@ use Redis\RESP\Response\RESPResponse;
 
 class ReplconfCommand implements RedisCommand
 {
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         if (empty($args)) {
             return ResponseFactory::wrongNumberOfArguments('replconf');

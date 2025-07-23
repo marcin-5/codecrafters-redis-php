@@ -85,7 +85,7 @@ class CommandRegistry
         return $this->commands[strtoupper($name)] ?? null;
     }
 
-    public function execute(string $commandName, array $args): RESPResponse
+    public function execute(object $client, string $commandName, array $args): RESPResponse
     {
         $commandName = strtoupper($commandName);
 
@@ -94,14 +94,14 @@ class CommandRegistry
             $subCommand = strtoupper($args[0]);
             if ($subCommand === 'GET') {
                 $subArgs = array_slice($args, 1);
-                return $this->executeCommand('CONFIG', $subArgs);
+                return $this->executeCommand($client, 'CONFIG', $subArgs);
             }
         }
 
-        return $this->executeCommand($commandName, $args);
+        return $this->executeCommand($client, $commandName, $args);
     }
 
-    private function executeCommand(string $commandName, array $args): RESPResponse
+    private function executeCommand(object $client, string $commandName, array $args): RESPResponse
     {
         if (!isset($this->commands[$commandName])) {
             return ResponseFactory::unknownCommand($commandName);
@@ -109,15 +109,16 @@ class CommandRegistry
 
         $command = $this->commands[$commandName];
 
-        // If we're in a transaction and this isn't MULTI, EXEC, or DISCARD, queue it
-        if ($this->transactionManager->isInTransaction() &&
+        // If the client is in a transaction, queue the command (with some exceptions)
+        if ($this->transactionManager->isInTransaction($client) &&
             !in_array($commandName, ['MULTI', 'EXEC', 'DISCARD'])) {
-            $this->transactionManager->queueCommand($commandName, $args, $command);
+            $this->transactionManager->queueCommand($client, $commandName, $args, $command);
             return ResponseFactory::queued();
         }
 
-        // Execute immediately
-        return $command->execute($args);
+        // Execute immediately, passing the client to the command's execute method.
+        // This requires the RedisCommand interface to be updated.
+        return $command->execute($client, $args);
     }
 
     public function getTransactionManager(): TransactionManager

@@ -17,7 +17,7 @@ class XRangeCommand implements RedisCommand
     {
     }
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         $parseResult = $this->parseArguments($args);
         if ($parseResult instanceof RESPResponse) {

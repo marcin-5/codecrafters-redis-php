@@ -13,7 +13,7 @@ readonly class WaitCommand implements RedisCommand
     ) {
     }
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         // WAIT numreplicas timeout
         if (count($args) < 2) {

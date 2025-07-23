@@ -6,20 +6,20 @@ use Redis\RESP\Response\ResponseFactory;
 use Redis\RESP\Response\RESPResponse;
 use Redis\Transaction\TransactionManager;
 
-class MultiCommand implements RedisCommand
+readonly class MultiCommand implements RedisCommand
 {
     public function __construct(
-        private readonly TransactionManager $transactionManager,
+        private TransactionManager $transactionManager,
     ) {
     }
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
-        if ($this->transactionManager->isInTransaction()) {
+        if ($this->transactionManager->isInTransaction($client)) {
             return ResponseFactory::error("ERR MULTI calls can not be nested");
         }
 
-        $this->transactionManager->startTransaction();
+        $this->transactionManager->startTransaction($client);
         return ResponseFactory::ok();
     }
 }

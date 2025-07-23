@@ -14,7 +14,7 @@ class PsyncCommand implements RedisCommand
     // Empty RDB file content for now (base64 decoded)
     private const string EMPTY_RDB_BASE64 = 'UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==';
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         if (count($args) < 2) {
             return ResponseFactory::wrongNumberOfArguments('psync');

@@ -15,7 +15,7 @@ class IncrCommand implements RedisCommand
     {
     }
 
-    public function execute(array $args): RESPResponse
+    public function execute(object $client, array $args): RESPResponse
     {
         if (count($args) < self::MIN_ARGS_COUNT) {
             return ResponseFactory::wrongNumberOfArguments(self::COMMAND_NAME);
