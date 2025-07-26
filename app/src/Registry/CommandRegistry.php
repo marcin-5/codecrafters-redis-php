@@ -3,6 +3,7 @@
 namespace Redis\Registry;
 
 use Redis\Commands\ConfigGetCommand;
+use Redis\Commands\DiscardCommand;
 use Redis\Commands\EchoCommand;
 use Redis\Commands\ExecCommand;
 use Redis\Commands\GetCommand;
@@ -61,6 +62,7 @@ class CommandRegistry
         // Register transaction commands
         $registry->register('MULTI', new MultiCommand($registry->transactionManager));
         $registry->register('EXEC', new ExecCommand($registry->transactionManager));
+        $registry->register('DISCARD', new DiscardCommand($registry->transactionManager));
 
         // Register WAIT command if replication manager is provided
         if ($replicationManager !== null) {
