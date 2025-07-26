@@ -57,7 +57,7 @@ class TransactionManager
     public function executeQueue(object $client): array
     {
         $context = $this->getContextFor($client);
-        $results = $context->commandQueue->executeAll();
+        $results = $context->commandQueue->executeAll($client);
         $this->clearTransaction($client);
         return $results;
     }

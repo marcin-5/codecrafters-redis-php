@@ -38,14 +38,12 @@ class CommandQueue implements \IteratorAggregate
     /**
      * Execute all commands in the queue and return results
      */
-    public function executeAll(): array
+    public function executeAll(object $client): array
     {
         $results = [];
         while (!$this->isEmpty()) {
             $node = $this->dequeue();
-            // The redundant null check has been removed, as the loop condition
-            // ensures that dequeue() will not return null here.
-            $results[] = $node->command->execute($node->args);
+            $results[] = $node->command->execute($client, $node->args);
         }
         return $results;
     }
